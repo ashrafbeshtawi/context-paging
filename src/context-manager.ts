@@ -146,6 +146,7 @@ export async function handlePageMove(args: {
     targetParentDir = parentDir;
   } else {
     targetParentDir = path.resolve(process.env.PAGES_ROOT || "./pages");
+
   }
 
   await movePageDir(sourceDir, targetParentDir);

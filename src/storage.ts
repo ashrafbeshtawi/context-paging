@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PageMeta, PageNode, CounterData } from "./types.js";
 
-const PAGES_ROOT = process.env.PAGES_ROOT || "./pages";
-
 function root(): string {
-  return path.resolve(PAGES_ROOT);
+  return path.resolve(process.env.PAGES_ROOT || "./pages");
 }
 
 export async function ensureRoot(): Promise<void> {
