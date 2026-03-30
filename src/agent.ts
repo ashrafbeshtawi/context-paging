@@ -1,4 +1,4 @@
-import { generateText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
+import { streamText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
 import { z } from "zod";
 import {
   handlePageOut,
@@ -13,6 +13,15 @@ import {
 
 const SYSTEM_PROMPT = `You are an AI assistant powered by Context Paging — virtual memory for your context window.
 
+You have the following tools available for managing your context:
+- page_out: Save context to disk and remove it from your active window
+- page_in: Load a page back into your active context
+- page_table: View the index of all stored pages
+- page_update: Modify a page's metadata or content
+- page_free: Permanently delete a page
+- page_move: Reorganize page nesting
+- page_merge: Consolidate multiple pages into one
+
 ## How Context Paging works
 - Your context window is like RAM: finite. Context Paging lets you swap content to disk and page it back in on demand.
 - When you call page_out, the messages containing that context are SWAPPED OUT (removed from your active context and replaced with a short reference). This frees up space.
@@ -21,7 +30,7 @@ const SYSTEM_PROMPT = `You are an AI assistant powered by Context Paging — vir
 
 ## When to page out
 - After completing a significant piece of work (debugging session, implementation, research)
-- When the conversation is getting long and you've accumulated knowledge worth preserving
+- When the conversation is getting long and you have accumulated knowledge worth preserving
 - Before switching to a different topic or subtask
 - When the user asks you to save/checkpoint context
 
@@ -140,6 +149,10 @@ export function createTools() {
 export interface AgentOptions {
   model: LanguageModel;
   maxSteps?: number;
+  debug?: boolean;
+  onText?: (text: string) => void;
+  onToolCall?: (toolName: string, args: unknown) => void;
+  onToolResult?: (toolName: string, result: unknown) => void;
 }
 
 export async function runAgent(
@@ -148,17 +161,33 @@ export async function runAgent(
 ): Promise<{ messages: ModelMessage[]; response: string }> {
   const maxSteps = options.maxSteps || 10;
 
-  const result = await generateText({
+  const result = streamText({
     model: options.model,
     system: SYSTEM_PROMPT,
     messages,
     tools: createTools(),
     stopWhen: stepCountIs(maxSteps),
+    experimental_onToolCallStart({ toolCall }) {
+      options.onToolCall?.(toolCall.toolName, toolCall.input);
+    },
+    experimental_onToolCallFinish(event) {
+      options.onToolResult?.(event.toolCall.toolName, "output" in event ? event.output : undefined);
+    },
   });
 
-  let updatedMessages: ModelMessage[] = [...messages, ...result.response.messages];
+  // Stream text chunks to the callback
+  for await (const chunk of result.textStream) {
+    options.onText?.(chunk);
+  }
 
-  for (const step of result.steps) {
+  // Wait for the full result
+  const finalResult = await result;
+  const responseText = await finalResult.text;
+
+  const response = await finalResult.response;
+  let updatedMessages: ModelMessage[] = [...messages, ...response.messages];
+
+  for (const step of (await finalResult.steps)) {
     for (const toolResult of step.toolResults) {
       if (
         toolResult.toolName === "page_out" &&
@@ -188,6 +217,6 @@ export async function runAgent(
 
   return {
     messages: updatedMessages,
-    response: result.text,
+    response: responseText,
   };
 }
