@@ -161,9 +161,16 @@ export async function runAgent(
 ): Promise<{ messages: ModelMessage[]; response: string }> {
   const maxSteps = options.maxSteps || 10;
 
+  // Inject live page table into system prompt so the agent always knows page IDs + titles
+  const pageTable = await handlePageTable({});
+  const systemWithPageTable = `${SYSTEM_PROMPT}
+
+## Current Page Table
+${pageTable}`;
+
   const result = streamText({
     model: options.model,
-    system: SYSTEM_PROMPT,
+    system: systemWithPageTable,
     messages,
     tools: createTools(),
     stopWhen: stepCountIs(maxSteps),
