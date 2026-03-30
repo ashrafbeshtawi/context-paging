@@ -11,7 +11,7 @@ No more losing context to truncation. No more lossy summarization. The agent man
 ## How It Works
 
 ```
-User message → Agent (Claude) → responds + decides what to page
+User message → Agent (any LLM) → responds + decides what to page
                                         ↓
                                page_out called
                                         ↓
@@ -62,13 +62,30 @@ The agent has 7 tools, named after OS memory management operations:
 ## Prerequisites
 
 - **Node.js** >= 18
-- **Anthropic API key** — get one at https://console.anthropic.com/
+- An API key for at least one supported LLM provider
+
+## Supported Providers
+
+| Provider | Package | API Key Env Var | Default Model |
+|----------|---------|----------------|---------------|
+| Anthropic | `@ai-sdk/anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| OpenAI | `@ai-sdk/openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| Google | `@ai-sdk/google` | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.0-flash` |
+| Mistral | `@ai-sdk/mistral` | `MISTRAL_API_KEY` | `mistral-large-latest` |
+| xAI | `@ai-sdk/xai` | `XAI_API_KEY` | `grok-3` |
+| Amazon Bedrock | `@ai-sdk/amazon-bedrock` | AWS credentials | — |
+| Azure OpenAI | `@ai-sdk/azure` | `AZURE_API_KEY` | — |
 
 ## Setup
 
 ```bash
-# Install dependencies
+# Install core dependencies
 npm install
+
+# Install the provider you want (pick one or more)
+npm install @ai-sdk/anthropic    # for Claude
+npm install @ai-sdk/openai       # for GPT-4o, o1, etc.
+npm install @ai-sdk/google       # for Gemini
 
 # Build
 npm run build
@@ -76,10 +93,31 @@ npm run build
 
 ## Configuration
 
-### Required
+### Provider & Model
+
+Set via environment variables:
 
 ```bash
+# Provider (default: "anthropic")
+export AI_PROVIDER=anthropic
+
+# Model (default: depends on provider)
+export AI_MODEL=claude-sonnet-4-20250514
+```
+
+### API Key
+
+Each provider reads its own env var:
+
+```bash
+# Anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
+export OPENAI_API_KEY=sk-...
+
+# Google
+export GOOGLE_GENERATIVE_AI_API_KEY=...
 ```
 
 ### Optional
@@ -89,25 +127,26 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export PAGES_ROOT=/path/to/your/pages
 ```
 
-### Model
-
-The agent uses `claude-sonnet-4-20250514` by default. Change it in `src/agent.ts`:
-
-```typescript
-const modelId = options?.model || "claude-sonnet-4-20250514";
-```
-
-Other options: `claude-opus-4-20250514`, `claude-haiku-4-5-20251001`
-
 ## Running
 
 ```bash
+# With Anthropic (default)
 ANTHROPIC_API_KEY=sk-ant-... npm start
+
+# With OpenAI
+AI_PROVIDER=openai OPENAI_API_KEY=sk-... npm start
+
+# With Google
+AI_PROVIDER=google GOOGLE_GENERATIVE_AI_API_KEY=... npm start
+
+# With a specific model
+AI_PROVIDER=openai AI_MODEL=gpt-4o-mini OPENAI_API_KEY=sk-... npm start
 ```
 
 ```
 Context Paging Agent
 Virtual memory for AI context. The agent pages context in and out on demand.
+Provider: anthropic | Model: claude-sonnet-4-20250514
 Type "quit" to exit.
 
 You: Help me debug the authentication module
@@ -149,6 +188,7 @@ pages/
 src/
   index.ts              # CLI chat loop
   agent.ts              # Agent core: LLM calls, tool definitions, swap logic
+  providers.ts          # Dynamic provider resolution (Anthropic, OpenAI, Google, etc.)
   context-manager.ts    # Page operations + swapOut / swapIn
   storage.ts            # Filesystem operations
   toc.ts                # Page table formatter

@@ -1,5 +1,4 @@
-import { generateText, tool, type CoreMessage } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { generateText, tool, type CoreMessage, type LanguageModel } from "ai";
 import { z } from "zod";
 import {
   handlePageOut,
@@ -139,19 +138,18 @@ export function createTools() {
 }
 
 export interface AgentOptions {
-  model?: string;
+  model: LanguageModel;
   maxSteps?: number;
 }
 
 export async function runAgent(
   messages: CoreMessage[],
-  options?: AgentOptions
+  options: AgentOptions
 ): Promise<{ messages: CoreMessage[]; response: string }> {
-  const modelId = options?.model || "claude-sonnet-4-20250514";
-  const maxSteps = options?.maxSteps || 10;
+  const maxSteps = options.maxSteps || 10;
 
   const result = await generateText({
-    model: anthropic(modelId),
+    model: options.model,
     system: SYSTEM_PROMPT,
     messages,
     tools: createTools(),
