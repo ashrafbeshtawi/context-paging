@@ -66,15 +66,15 @@ The agent has 7 tools, named after OS memory management operations:
 
 ## Supported Providers
 
-| Provider | Package | API Key Env Var | Default Model |
-|----------|---------|----------------|---------------|
-| Anthropic | `@ai-sdk/anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
-| OpenAI | `@ai-sdk/openai` | `OPENAI_API_KEY` | `gpt-4o` |
-| Google | `@ai-sdk/google` | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.0-flash` |
-| Mistral | `@ai-sdk/mistral` | `MISTRAL_API_KEY` | `mistral-large-latest` |
-| xAI | `@ai-sdk/xai` | `XAI_API_KEY` | `grok-3` |
-| Amazon Bedrock | `@ai-sdk/amazon-bedrock` | AWS credentials | — |
-| Azure OpenAI | `@ai-sdk/azure` | `AZURE_API_KEY` | — |
+| Provider | `AI_PROVIDER` value | Package | API Key Env Var | Default Model |
+|----------|-------------------|---------|----------------|---------------|
+| Anthropic | `anthropic` | `@ai-sdk/anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| OpenAI | `openai` | `@ai-sdk/openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| Google | `google` | `@ai-sdk/google` | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.0-flash` |
+| Mistral | `mistral` | `@ai-sdk/mistral` | `MISTRAL_API_KEY` | `mistral-large-latest` |
+| xAI | `xai` | `@ai-sdk/xai` | `XAI_API_KEY` | `grok-3` |
+| Amazon Bedrock | `amazon-bedrock` | `@ai-sdk/amazon-bedrock` | AWS credentials | — |
+| Azure OpenAI | `azure` | `@ai-sdk/azure` | `AZURE_API_KEY` | — |
 
 ## Setup
 
@@ -99,9 +99,10 @@ Set via environment variables:
 
 ```bash
 # Provider (default: "anthropic")
+# Options: anthropic | openai | google | mistral | xai | amazon-bedrock | azure
 export AI_PROVIDER=anthropic
 
-# Model (default: depends on provider)
+# Model (default: depends on provider — see table above)
 export AI_MODEL=claude-sonnet-4-20250514
 ```
 
