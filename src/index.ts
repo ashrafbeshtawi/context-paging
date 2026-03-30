@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "dotenv/config";
 import * as readline from "node:readline";
 import type { CoreMessage } from "ai";
 import { runAgent } from "./agent.js";
