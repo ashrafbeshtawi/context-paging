@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Context Paging: Virtual Memory for AI Agent Context Windows</title>
+<style>
+  /* Reset and base */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Georgia, "Times New Roman", Times, serif;
+    font-size: 11.5pt;
+    line-height: 1.65;
+    color: #1a1a1a;
+    background: #fff;
+    padding: 2rem 1rem;
+  }
+
+  .paper {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  /* Title block */
+  .title-block {
+    text-align: center;
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #ccc;
+  }
+
+  .title-block h1 {
+    font-size: 1.65rem;
+    font-weight: 700;
+    line-height: 1.3;
+    margin-bottom: 0.8rem;
+  }
+
+  .authors {
+    font-size: 1.05rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .date {
+    font-size: 0.92rem;
+    color: #555;
+  }
+
+  /* Abstract */
+  .abstract {
+    margin-bottom: 2rem;
+    padding: 1.2rem 1.5rem;
+    border-left: 3px solid #333;
+    background: #fafafa;
+  }
+
+  .abstract h2 {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.5rem;
+  }
+
+  .abstract p {
+    font-size: 0.97rem;
+  }
+
+  /* Headings */
+  h2 {
+    font-size: 1.25rem;
+    margin-top: 2.2rem;
+    margin-bottom: 0.7rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid #ddd;
+  }
+
+  h3 {
+    font-size: 1.08rem;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  h4 {
+    font-size: 1rem;
+    font-style: italic;
+    margin-top: 1.2rem;
+    margin-bottom: 0.4rem;
+  }
+
+  /* Paragraphs and lists */
+  p {
+    margin-bottom: 0.85rem;
+    text-align: justify;
+    hyphens: auto;
+  }
+
+  ul, ol {
+    margin-bottom: 0.85rem;
+    padding-left: 1.8rem;
+  }
+
+  li {
+    margin-bottom: 0.3rem;
+  }
+
+  /* Code */
+  code {
+    font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+    font-size: 0.88em;
+    background: #f0f0f0;
+    padding: 0.12em 0.35em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1rem;
+    line-height: 1.5;
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: 0.84em;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.2rem;
+    font-size: 0.93rem;
+  }
+
+  th, td {
+    border: 1px solid #ccc;
+    padding: 0.5rem 0.7rem;
+    text-align: left;
+  }
+
+  th {
+    background: #f0f0f0;
+    font-weight: 700;
+  }
+
+  caption, .table-caption {
+    font-size: 0.92rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+    text-align: left;
+  }
+
+  /* Figures */
+  .figure {
+    margin: 1.5rem 0;
+    text-align: center;
+  }
+
+  .figure pre {
+    text-align: left;
+    display: inline-block;
+    min-width: 60%;
+  }
+
+  .figure-caption {
+    font-size: 0.9rem;
+    font-style: italic;
+    margin-top: 0.5rem;
+    color: #444;
+  }
+
+  /* References */
+  .references {
+    font-size: 0.93rem;
+  }
+
+  .references ol {
+    padding-left: 1.5rem;
+  }
+
+  .references li {
+    margin-bottom: 0.5rem;
+  }
+
+  /* Utility */
+  .checkmark { color: #2a7d2a; font-weight: bold; }
+  .crossmark { color: #b33; font-weight: bold; }
+  .partial { color: #b38600; font-weight: bold; }
+
+  /* Print styles */
+  @media print {
+    body { padding: 0; font-size: 10.5pt; }
+    .paper { max-width: 100%; }
+    pre { border-color: #999; }
+    h2 { page-break-after: avoid; }
+    .figure { page-break-inside: avoid; }
+    table { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<article class="paper">
+
+<!-- ============================================================ -->
+<!-- TITLE BLOCK -->
+<!-- ============================================================ -->
+<header class="title-block">
+  <h1>Context Paging: Virtual Memory for AI Agent Context Windows</h1>
+  <div class="authors">Ashraf Beshtawi</div>
+  <div class="date">March 2026</div>
+</header>
+
+<!-- ============================================================ -->
+<!-- ABSTRACT -->
+<!-- ============================================================ -->
+<section class="abstract">
+  <h2>Abstract</h2>
+  <p>
+    Large language model (LLM) agents operating over extended interactions inevitably
+    encounter a fundamental constraint: the finite context window. Current mitigation
+    strategies — truncation, summarization, and retrieval-augmented generation — each
+    sacrifice fidelity, determinism, or agent autonomy. We introduce <em>Context Paging</em>,
+    an approach that applies the operating system virtual memory paging model to LLM
+    context management. In this framework the context window is treated as physical RAM,
+    a filesystem serves as backing store, and a page table maintained in the system prompt
+    gives the agent a persistent index of everything it has stored. The agent is equipped
+    with seven paging tools — <code>page_out</code>, <code>page_in</code>,
+    <code>page_table</code>, <code>page_update</code>, <code>page_free</code>,
+    <code>page_move</code>, and <code>page_merge</code> — enabling it to explicitly
+    manage its own memory: swapping context to disk when capacity is scarce and
+    restoring it on demand. We present a proof-of-concept implementation built with
+    TypeScript and the Vercel AI SDK, supporting seven LLM providers, and validated
+    by a suite of 69 unit tests. Context Paging is lossless, deterministic, and
+    agent-controlled, offering a complementary mechanism to existing approaches.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 1. INTRODUCTION -->
+<!-- ============================================================ -->
+<section>
+  <h2>1. Introduction</h2>
+  <p>
+    AI agents powered by large language models are increasingly deployed in
+    long-running, multi-turn conversations: debugging sessions that span hundreds
+    of messages, research tasks that accumulate large bodies of intermediate results,
+    and collaborative workflows where context from hours ago remains relevant. In
+    each of these scenarios the agent's context window — the fixed-size buffer of
+    tokens the model can attend to at any given inference step — becomes the
+    binding constraint.
+  </p>
+  <p>
+    When the conversation exceeds the context window, something must give. The
+    three dominant strategies each carry significant trade-offs:
+  </p>
+  <ul>
+    <li>
+      <strong>Truncation</strong> discards the oldest messages outright. Context
+      is lost permanently; the agent cannot recover it.
+    </li>
+    <li>
+      <strong>Summarization</strong> compresses older context into a shorter
+      representation. This is inherently lossy: specific details, code snippets,
+      exact error messages, and nuanced reasoning are discarded in favor of a
+      compressed gist.
+    </li>
+    <li>
+      <strong>Retrieval-Augmented Generation (RAG)</strong> stores context
+      externally and retrieves relevant fragments via semantic search at query
+      time. Retrieval quality is query-dependent and non-deterministic; relevant
+      context may be missed if the retrieval query is poorly formed.
+    </li>
+  </ul>
+  <p>
+    Critically, in all three approaches the agent has no explicit control over what
+    is retained and what is discarded. The system makes the decision on its behalf
+    — or the decision is made by the architecture before the agent is even invoked.
+  </p>
+  <p>
+    This paper proposes <em>Context Paging</em>, a method that gives the agent
+    direct, tool-mediated control over its context lifecycle. The core insight is
+    borrowed from operating systems: virtual memory paging. Just as an OS
+    transparently swaps memory pages between RAM and disk to present processes
+    with an address space larger than physical memory, Context Paging lets an
+    agent swap conversation segments between its active context window and
+    persistent storage, maintaining a page table as a compact index of
+    everything stored.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 2. BACKGROUND -->
+<!-- ============================================================ -->
+<section>
+  <h2>2. Background</h2>
+
+  <h3>2.1 LLM Context Windows and Their Limitations</h3>
+  <p>
+    A large language model processes input as a sequence of tokens within a
+    fixed-length context window. Modern models offer windows ranging from 8K
+    tokens (earlier GPT-4 variants) to 200K tokens (Claude 3.5) and beyond (Gemini
+    1.5 Pro at 1M tokens). Despite these increases, the context window remains
+    finite, and its effective utilization degrades well before the hard limit:
+    studies have shown that models exhibit a "lost in the middle" phenomenon
+    [1], where information placed in the center of a long context is recalled
+    less reliably than information near the beginning or end.
+  </p>
+  <p>
+    For agentic workloads — where the conversation may span dozens of tool calls,
+    branching subtasks, and iterative refinements — the context window fills
+    rapidly. Each tool call and its result, each intermediate reasoning step,
+    and each user clarification consumes tokens. A debugging session of moderate
+    length can easily reach 50,000&ndash;100,000 tokens, with much of that content
+    being intermediate work that is no longer actively needed but may become
+    relevant again later.
+  </p>
+
+  <h3>2.2 Operating System Virtual Memory as an Analogy</h3>
+  <p>
+    The operating system's virtual memory subsystem solves an analogous problem.
+    Physical RAM is finite, but processes require address spaces that may exceed
+    available memory. The OS resolves this through demand paging:
+  </p>
+  <ul>
+    <li>Physical memory (RAM) is divided into fixed-size <em>frames</em>.</li>
+    <li>A process's virtual address space is divided into <em>pages</em>.</li>
+    <li>A <em>page table</em> maps virtual pages to physical frames (or marks them as swapped to disk).</li>
+    <li>When a process accesses a page not currently in RAM, a <em>page fault</em> triggers the OS to load it from disk.</li>
+    <li>When RAM is full, the OS selects a page to <em>swap out</em> (evict to disk), freeing a frame for the incoming page.</li>
+  </ul>
+  <p>
+    The mapping from this model to LLM context management is direct:
+  </p>
+
+  <div class="table-caption">Table 1. Mapping between OS virtual memory and Context Paging.</div>
+  <table>
+    <thead>
+      <tr>
+        <th>OS Concept</th>
+        <th>Context Paging Analogue</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Physical RAM</td><td>Active context window</td></tr>
+      <tr><td>Disk / swap space</td><td>Filesystem storage (<code>pages/</code> directory)</td></tr>
+      <tr><td>Page</td><td>A saved unit of conversation context</td></tr>
+      <tr><td>Page table</td><td>Lightweight index injected into the system prompt</td></tr>
+      <tr><td>Page fault (swap in)</td><td><code>page_in</code> tool call</td></tr>
+      <tr><td>Swap out / eviction</td><td><code>page_out</code> tool call</td></tr>
+      <tr><td>Free / deallocation</td><td><code>page_free</code> tool call</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The key difference is agency: in an OS, the kernel manages paging
+    transparently. In Context Paging, the LLM agent itself decides what to page
+    out and when to page in, using explicit tool calls. This gives the agent
+    awareness of and control over its own memory constraints — a form of
+    metacognitive memory management.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 3. APPROACH -->
+<!-- ============================================================ -->
+<section>
+  <h2>3. Approach &mdash; Context Paging</h2>
+
+  <h3>3.1 Architecture</h3>
+  <p>
+    The Context Paging system consists of three layers: (1) the LLM agent with
+    its standard conversational capabilities; (2) a set of seven paging tools
+    exposed to the agent via function calling; and (3) a storage backend that
+    persists pages to the filesystem.
+  </p>
+
+  <div class="table-caption">Table 2. The seven paging tools.</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>OS Analogy</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>page_out</code></td>
+        <td>Swap out</td>
+        <td>Save context to disk, remove from active window</td>
+      </tr>
+      <tr>
+        <td><code>page_in</code></td>
+        <td>Swap in / page fault</td>
+        <td>Load a page's content back into active context</td>
+      </tr>
+      <tr>
+        <td><code>page_table</code></td>
+        <td>Page table query</td>
+        <td>View the index of all stored pages and their status</td>
+      </tr>
+      <tr>
+        <td><code>page_update</code></td>
+        <td>&mdash;</td>
+        <td>Modify a page's metadata (title, summary) or content</td>
+      </tr>
+      <tr>
+        <td><code>page_free</code></td>
+        <td>Free / dealloc</td>
+        <td>Permanently delete a page from disk</td>
+      </tr>
+      <tr>
+        <td><code>page_move</code></td>
+        <td>&mdash;</td>
+        <td>Reorganize page hierarchy (re-parent a page)</td>
+      </tr>
+      <tr>
+        <td><code>page_merge</code></td>
+        <td>&mdash;</td>
+        <td>Consolidate multiple pages into one</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 The Paging Lifecycle</h3>
+  <p>
+    A typical paging cycle proceeds as follows:
+  </p>
+  <ol>
+    <li>
+      The agent accumulates context through normal conversation: user messages,
+      assistant responses, tool calls and results.
+    </li>
+    <li>
+      At a decision point — the end of a subtask, a topic switch, or an explicit
+      user request — the agent calls <code>page_out</code> with a title, summary,
+      content, and a <code>swap_count</code> parameter indicating how many recent
+      messages to remove from context.
+    </li>
+    <li>
+      The system writes the content to disk as a numbered page directory, removes
+      the specified messages from the conversation array, and inserts a compact
+      placeholder: <code>[Paged out → Page N: "title" — summary]</code>.
+    </li>
+    <li>
+      The next LLM inference call sees a smaller context with the placeholder,
+      plus an updated page table in the system prompt.
+    </li>
+    <li>
+      When the agent later needs that context, it calls <code>page_in</code>.
+      The full content is loaded from disk and appended to the message array.
+    </li>
+  </ol>
+
+  <div class="figure">
+    <pre><code>            ┌──────────────────────────────────────┐
+            │       Active Context Window (RAM)      │
+            │                                        │
+            │  Recent messages + page placeholders   │
+            └──────────┬──────────────▲──────────────┘
+                       │              │
+                  page_out        page_in
+                  (swap out)      (swap in)
+                       │              │
+            ┌──────────▼──────────────┴──────────────┐
+            │         Disk Storage (pages/)           │
+            │                                         │
+            │  Page 1: "Auth debugging"    [swapped]  │
+            │  Page 2: "API design"       [resident]  │
+            │  Page 3: "Test results"      [swapped]  │
+            └─────────────────────────────────────────┘</code></pre>
+    <div class="figure-caption">Figure 1. The paging lifecycle. Context is swapped between the active context window and disk storage via tool calls.</div>
+  </div>
+
+  <h3>3.3 Page Table Injection</h3>
+  <p>
+    A critical design decision is how the agent maintains awareness of its stored
+    pages. In Context Paging, the current page table is injected into the system
+    prompt before every LLM call. This ensures the agent always sees an up-to-date
+    index of all pages — their IDs, titles, summaries, timestamps, and residency
+    status — without those pages consuming significant context space. The page
+    table serves the same role as an OS page table: a compact mapping that lets
+    the agent know what it has stored and where to find it.
+  </p>
+  <p>
+    This approach is implemented in the agent's core loop:
+  </p>
+  <pre><code>// Inject live page table into system prompt
+const pageTable = await handlePageTable({});
+const systemWithPageTable = `${SYSTEM_PROMPT}
+
+## Current Page Table
+${pageTable}`;</code></pre>
+
+  <h3>3.4 Provider-Agnostic Design</h3>
+  <p>
+    Context Paging is implemented using the Vercel AI SDK, which provides a
+    unified interface across multiple LLM providers. The paging logic is entirely
+    independent of the underlying model; any provider that supports tool calling
+    can use the system. The proof-of-concept implementation supports seven
+    providers: Anthropic (Claude), OpenAI (GPT-4o), Google (Gemini), Mistral,
+    xAI (Grok), Amazon Bedrock, and Azure OpenAI. The provider and model are
+    selected at runtime via environment variables, with no code changes required.
+  </p>
+
+  <h3>3.5 Storage Format</h3>
+  <p>
+    Pages are persisted as directories on the filesystem, enabling hierarchical
+    organization through nesting:
+  </p>
+  <pre><code>pages/
+  _counter.json              # Auto-incrementing page ID tracker
+  1/                         # Page directory
+    meta.json                # { id, title, summary, created_at, updated_at, is_resident }
+    content.md               # Full page content (markdown)
+    3/                       # Nested child page
+      meta.json
+      content.md
+  2/
+    meta.json
+    content.md</code></pre>
+  <p>
+    Each page's metadata is stored separately from its content, allowing the page
+    table to be constructed by reading only the lightweight <code>meta.json</code>
+    files. Content is stored as Markdown, preserving formatting, code blocks, and
+    structured data without transformation. The <code>is_resident</code> flag in
+    metadata tracks whether a page's content is currently present in the active
+    context.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 4. PROOF OF CONCEPT -->
+<!-- ============================================================ -->
+<section>
+  <h2>4. Proof of Concept Implementation</h2>
+
+  <h3>4.1 Technology Stack</h3>
+  <p>
+    The proof-of-concept is implemented in TypeScript and structured as a modular
+    Node.js application:
+  </p>
+
+  <div class="table-caption">Table 3. Project module structure.</div>
+  <table>
+    <thead>
+      <tr><th>Module</th><th>Responsibility</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>index.ts</code></td><td>CLI chat loop with streaming output</td></tr>
+      <tr><td><code>agent.ts</code></td><td>Agent core: LLM calls, tool definitions, swap logic</td></tr>
+      <tr><td><code>providers.ts</code></td><td>Dynamic provider resolution across 7 backends</td></tr>
+      <tr><td><code>context-manager.ts</code></td><td>Page operations (page out, in, update, free, move, merge)</td></tr>
+      <tr><td><code>storage.ts</code></td><td>Filesystem operations (read/write pages, tree building)</td></tr>
+      <tr><td><code>toc.ts</code></td><td>Page table formatter</td></tr>
+      <tr><td><code>types.ts</code></td><td>TypeScript interfaces (<code>PageMeta</code>, <code>PageNode</code>, etc.)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 Runtime Behavior</h3>
+  <p>
+    The agent operates as an interactive CLI application with streaming responses.
+    When the agent calls <code>page_out</code>, the swap is performed immediately:
+    the specified number of messages are removed from the conversation array and
+    replaced with a placeholder. The user sees a context indicator showing the
+    current number of resident messages. An optional debug mode displays tool
+    call arguments and results in real time.
+  </p>
+
+  <h3>4.3 Swap Mechanics</h3>
+  <p>
+    The swap-out operation is implemented as a pure function over the message array:
+  </p>
+  <pre><code>function swapOut(
+  messages: ModelMessage[],
+  pageId: number,
+  title: string,
+  summary: string,
+  swapCount?: number
+): ModelMessage[] {
+  if (!swapCount || swapCount <= 0) return messages;
+  const keepCount = Math.max(0, messages.length - swapCount);
+  const result = messages.slice(0, keepCount);
+  result.push({
+    role: "assistant",
+    content: `[Paged out → Page ${pageId}: "${title}" — ${summary}]`,
+  });
+  return result;
+}</code></pre>
+  <p>
+    This design ensures that the swap operation is deterministic and testable:
+    given the same inputs, it always produces the same output. The message array
+    is treated as immutable; a new array is returned rather than mutating the
+    original.
+  </p>
+
+  <h3>4.4 Validation</h3>
+  <p>
+    The implementation is validated by a comprehensive test suite of 69 unit tests
+    built with Vitest. The tests cover all seven tool operations, edge cases
+    (circular nesting prevention, missing pages, recursive deletion), the swap
+    mechanics, storage operations, and the page table formatter. All 69 tests pass.
+  </p>
+
+  <h3>4.5 Example Session</h3>
+  <p>
+    The following illustrates a paging interaction:
+  </p>
+  <pre><code>Context Paging Agent
+Provider: anthropic | Model: claude-sonnet-4-20250514
+Type "quit" to exit.
+
+You: Help me debug the authentication module
+Assistant: I'll help with that. Let me start by understanding the issue...
+  [Context: 4 messages resident]
+
+    ... (extended debugging conversation) ...
+
+You: Save what we've figured out so far
+Assistant: I'll page out our debugging progress.
+  → page_out("Auth debugging", swap_count: 12)
+  [Context: 3 messages resident]
+
+You: Now let's work on the API layer
+Assistant: Starting fresh on the API. I can page in the auth
+           work anytime if we need it later.
+  [Context: 5 messages resident]
+
+You: Actually, what was that error code from earlier?
+Assistant: Let me page that back in.
+  → page_in(1)
+  The error code was AUTH_EXPIRED_TOKEN (see Page 1).</code></pre>
+</section>
+
+<!-- ============================================================ -->
+<!-- 5. COMPARISON -->
+<!-- ============================================================ -->
+<section>
+  <h2>5. Comparison with Existing Approaches</h2>
+  <p>
+    Context Paging is not a replacement for existing context management strategies
+    but a complementary mechanism. The following table compares the four approaches
+    across key dimensions:
+  </p>
+
+  <div class="table-caption">Table 4. Comparison of context management approaches.</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th>Truncation</th>
+        <th>Summarization</th>
+        <th>RAG</th>
+        <th>Context Paging</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Lossless</strong></td>
+        <td class="crossmark">No</td>
+        <td class="crossmark">No</td>
+        <td class="partial">Partial</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+      <tr>
+        <td><strong>Agent-controlled</strong></td>
+        <td class="crossmark">No</td>
+        <td class="crossmark">No</td>
+        <td class="crossmark">No</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+      <tr>
+        <td><strong>Deterministic</strong></td>
+        <td class="checkmark">Yes</td>
+        <td class="crossmark">No</td>
+        <td class="crossmark">No</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+      <tr>
+        <td><strong>Recoverable</strong></td>
+        <td class="crossmark">No</td>
+        <td class="crossmark">No</td>
+        <td class="checkmark">Yes</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+      <tr>
+        <td><strong>No extra infrastructure</strong></td>
+        <td class="checkmark">Yes</td>
+        <td class="checkmark">Yes</td>
+        <td class="crossmark">No</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+      <tr>
+        <td><strong>Context-aware retrieval</strong></td>
+        <td>N/A</td>
+        <td>N/A</td>
+        <td class="partial">Partial</td>
+        <td class="checkmark">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <strong>Lossless.</strong> Truncation permanently discards context.
+    Summarization compresses it, losing detail. RAG stores original documents but
+    retrieval may return only fragments. Context Paging stores the full content
+    and restores it exactly as it was.
+  </p>
+  <p>
+    <strong>Agent-controlled.</strong> Only Context Paging gives the agent
+    explicit decision-making authority over what to store, when to store it,
+    and when to recall it. In all other approaches, the mechanism operates
+    outside the agent's control.
+  </p>
+  <p>
+    <strong>Deterministic.</strong> When the agent calls <code>page_in(3)</code>,
+    it always gets exactly the content of Page 3. There is no embedding similarity
+    threshold, no summarization variability, and no retrieval ranking to
+    introduce uncertainty.
+  </p>
+  <p>
+    <strong>Context-aware retrieval.</strong> Because the agent sees the page
+    table at every turn, it can make informed decisions about which pages are
+    relevant based on the full conversational context, not just a query embedding.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 6. FUTURE WORK -->
+<!-- ============================================================ -->
+<section>
+  <h2>6. Future Work</h2>
+
+  <h3>6.1 Benchmarking</h3>
+  <p>
+    The most immediate priority is rigorous benchmarking. We plan to evaluate
+    Context Paging against standard long-context benchmarks, comparing agent
+    performance with and without paging enabled. Key metrics include:
+  </p>
+  <ul>
+    <li><strong>Task completion accuracy</strong> over conversations that exceed the context window length.</li>
+    <li><strong>Context recall fidelity</strong> — how accurately the agent retrieves and applies previously paged-out information.</li>
+    <li><strong>Token efficiency</strong> — total tokens consumed per task, measuring whether paging reduces overall cost by keeping the active context lean.</li>
+  </ul>
+
+  <h3>6.2 Paging Trigger Strategies</h3>
+  <p>
+    A critical open question is when the agent should page out. The current
+    implementation relies on the agent's autonomous judgment, guided by system
+    prompt instructions. We identify several trigger strategies worth investigating:
+  </p>
+  <ul>
+    <li>
+      <strong>Context-percentage threshold.</strong> Automatically prompt the
+      agent to page out when the context window reaches a configurable
+      percentage of capacity (e.g., 75%).
+    </li>
+    <li>
+      <strong>Free-form (autonomous).</strong> Let the model decide entirely
+      on its own, based on its understanding of the conversation flow.
+    </li>
+    <li>
+      <strong>Message-count based.</strong> Trigger a paging prompt every
+      <em>N</em> messages.
+    </li>
+    <li>
+      <strong>Token-budget based.</strong> Page out when the remaining token
+      budget drops below a threshold, ensuring the agent always retains
+      enough capacity for its next response.
+    </li>
+    <li>
+      <strong>Hybrid approaches.</strong> Combine multiple signals — for
+      instance, token budget as a hard constraint with autonomous paging
+      as a soft preference.
+    </li>
+  </ul>
+
+  <h3>6.3 Automatic vs. Manual Paging</h3>
+  <p>
+    The current design is fully manual: the agent must explicitly invoke paging
+    tools. An alternative is automatic paging, where the system intercepts the
+    context before each LLM call and transparently pages out older content. This
+    mirrors the OS model more closely (where processes are unaware of paging)
+    but sacrifices the agent's ability to make informed decisions about what to
+    retain. A hybrid approach — automatic paging as a safety net with agent-initiated
+    paging as the primary mechanism — may offer the best of both worlds.
+  </p>
+
+  <h3>6.4 Multi-Agent Paging</h3>
+  <p>
+    In multi-agent architectures, multiple agents may need to share context.
+    Context Paging's filesystem-based storage naturally supports this: agents
+    can share a page directory, reading each other's pages. Future work should
+    explore shared page tables, concurrent access patterns, and page-level
+    locking semantics for agent swarms collaborating on a shared task.
+  </p>
+
+  <h3>6.5 Compression: Summarization Before Paging</h3>
+  <p>
+    Context Paging and summarization are not mutually exclusive. A promising
+    direction is to combine them: before paging out, the agent could summarize
+    the content and store both the summary (for quick reference) and the full
+    content (for lossless recovery). This would reduce disk usage and potentially
+    allow a two-tier retrieval strategy — check the summary first, page in the
+    full content only if needed.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- 7. CONCLUSION -->
+<!-- ============================================================ -->
+<section>
+  <h2>7. Conclusion</h2>
+  <p>
+    Context Paging applies one of the oldest and most successful ideas in
+    computer science — virtual memory paging — to one of the newest challenges
+    in AI systems: managing finite context windows in long-running agent
+    interactions. By giving the agent explicit tools to swap context between its
+    active window and persistent storage, and by maintaining a page table that
+    provides constant awareness of stored state, Context Paging enables lossless,
+    deterministic, and agent-controlled memory management.
+  </p>
+  <p>
+    The approach is complementary to existing strategies. It does not replace
+    RAG for knowledge retrieval over large corpora, nor does it eliminate the
+    value of summarization for creating concise representations. Rather, it fills
+    a gap: giving agents the ability to manage their own conversational memory
+    with the same precision and control that operating systems bring to process
+    memory management.
+  </p>
+  <p>
+    The proof-of-concept implementation demonstrates that the approach is
+    practical, provider-agnostic, and straightforward to implement with
+    existing tool-calling infrastructure. The key open questions — optimal
+    trigger strategies, automatic vs. manual paging, and multi-agent
+    coordination — define a productive research agenda. Context Paging is a
+    step toward agents that are not merely consumers of context but active
+    managers of their own cognitive resources.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- REFERENCES -->
+<!-- ============================================================ -->
+<section class="references">
+  <h2>References</h2>
+  <ol>
+    <li>
+      Liu, N.F., Lin, K., Hewitt, J., Paranjape, A., Bevilacqua, M., Petroni, F., &amp; Liang, P. (2024).
+      "Lost in the Middle: How Language Models Use Long Contexts."
+      <em>Transactions of the Association for Computational Linguistics</em>, 12, 157&ndash;173.
+    </li>
+    <li>
+      Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N., Kaiser, L., &amp; Polosukhin, I. (2017).
+      "Attention Is All You Need."
+      <em>Advances in Neural Information Processing Systems</em>, 30.
+    </li>
+    <li>
+      Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., Kuttler, H., Lewis, M., Yih, W., Rocktaschel, T., Riedel, S., &amp; Kiela, D. (2020).
+      "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks."
+      <em>Advances in Neural Information Processing Systems</em>, 33, 9459&ndash;9474.
+    </li>
+    <li>
+      Silberschatz, A., Galvin, P.B., &amp; Gagne, G. (2018).
+      <em>Operating System Concepts</em>, 10th edition. Wiley.
+      Chapters 9&ndash;10: Virtual Memory.
+    </li>
+    <li>
+      Denning, P.J. (1970).
+      "Virtual Memory."
+      <em>ACM Computing Surveys</em>, 2(3), 153&ndash;189.
+    </li>
+    <li>
+      Anthropic. (2024). "The Claude Model Family." Technical documentation.
+      Context window specifications and usage patterns for Claude 3 and 3.5 models.
+    </li>
+    <li>
+      OpenAI. (2024). "GPT-4 Technical Report." Context window sizes, token limits, and function calling capabilities.
+    </li>
+    <li>
+      Vercel. (2024). "Vercel AI SDK." Open-source library for building AI-powered applications with a unified provider interface.
+      <code>https://sdk.vercel.ai</code>
+    </li>
+    <li>
+      Schick, T., Dwivedi-Yu, J., Dessi, R., Raileanu, R., Lomeli, M., Zettlemoyer, L., Cancedda, N., &amp; Scialom, T. (2023).
+      "Toolformer: Language Models Can Teach Themselves to Use Tools."
+      <em>Advances in Neural Information Processing Systems</em>, 36.
+    </li>
+    <li>
+      Park, J.S., O'Brien, J.C., Cai, C.J., Morris, M.R., Liang, P., &amp; Bernstein, M.S. (2023).
+      "Generative Agents: Interactive Simulacra of Human Behavior."
+      <em>Proceedings of the 36th Annual ACM Symposium on User Interface Software and Technology</em>.
+    </li>
+  </ol>
+</section>
+
+</article>
+</body>
+</html>

@@ -4,6 +4,9 @@
   "description": "Context Paging — virtual memory for AI agents",
   "type": "module",
   "main": "build/index.js",
+  "bin": {
+    "context-paging": "./bin/start.sh"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
