@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { CoreMessage } from "ai";
+import type { ModelMessage } from "ai";
 import {
   handlePageOut,
   handlePageTable,
@@ -351,7 +351,7 @@ describe("handlePageMerge", () => {
 
 describe("swapOut", () => {
   it("returns original messages when swapCount is 0", () => {
-    const messages: CoreMessage[] = [
+    const messages: ModelMessage[] = [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
     ];
@@ -360,13 +360,13 @@ describe("swapOut", () => {
   });
 
   it("returns original messages when swapCount is undefined", () => {
-    const messages: CoreMessage[] = [{ role: "user", content: "hello" }];
+    const messages: ModelMessage[] = [{ role: "user", content: "hello" }];
     const result = swapOut(messages, 1, "Test", "Summary");
     expect(result).toEqual(messages);
   });
 
   it("removes messages and adds reference", () => {
-    const messages: CoreMessage[] = [
+    const messages: ModelMessage[] = [
       { role: "user", content: "first" },
       { role: "assistant", content: "response" },
       { role: "user", content: "second" },
@@ -385,7 +385,7 @@ describe("swapOut", () => {
   });
 
   it("handles swapCount larger than message count", () => {
-    const messages: CoreMessage[] = [{ role: "user", content: "only one" }];
+    const messages: ModelMessage[] = [{ role: "user", content: "only one" }];
     const result = swapOut(messages, 1, "Test", "S", 10);
     expect(result).toHaveLength(1); // just the reference
     expect(result[0].content).toContain("Paged out");
@@ -394,7 +394,7 @@ describe("swapOut", () => {
 
 describe("swapIn", () => {
   it("appends page content as an assistant message", () => {
-    const messages: CoreMessage[] = [
+    const messages: ModelMessage[] = [
       { role: "user", content: "tell me about auth" },
     ];
 
@@ -409,7 +409,7 @@ describe("swapIn", () => {
   });
 
   it("preserves original messages", () => {
-    const messages: CoreMessage[] = [
+    const messages: ModelMessage[] = [
       { role: "user", content: "a" },
       { role: "assistant", content: "b" },
     ];

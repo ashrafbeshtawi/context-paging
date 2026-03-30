@@ -1,4 +1,4 @@
-import { generateText, tool, type CoreMessage, type LanguageModel } from "ai";
+import { generateText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
 import { z } from "zod";
 import {
   handlePageOut,
@@ -41,7 +41,7 @@ export function createTools() {
     page_out: tool({
       description:
         "Swap context out to disk. Saves content into a new page and removes the corresponding messages from your active context.",
-      parameters: z.object({
+      inputSchema: z.object({
         title: z.string().describe("Page title"),
         content: z.string().describe("The context/content to page out"),
         summary: z.string().describe("Brief summary for the page table"),
@@ -61,7 +61,7 @@ export function createTools() {
 
     page_table: tool({
       description: "Show the page table — a lightweight index of all stored pages with their status.",
-      parameters: z.object({
+      inputSchema: z.object({
         parent_id: z.number().int().positive().optional().describe("List children of this page only"),
       }),
       execute: async (args) => {
@@ -72,7 +72,7 @@ export function createTools() {
 
     page_in: tool({
       description: "Swap a page back into your active context. Loads the full content and marks it as resident.",
-      parameters: z.object({
+      inputSchema: z.object({
         id: z.number().int().positive().describe("Page ID to swap in"),
       }),
       execute: async (args) => {
@@ -83,7 +83,7 @@ export function createTools() {
 
     page_update: tool({
       description: "Update a page's title, summary, content, or resident status.",
-      parameters: z.object({
+      inputSchema: z.object({
         id: z.number().int().positive().describe("Page ID"),
         title: z.string().optional().describe("New title"),
         summary: z.string().optional().describe("New summary"),
@@ -98,7 +98,7 @@ export function createTools() {
 
     page_free: tool({
       description: "Free a page — permanently delete it from disk.",
-      parameters: z.object({
+      inputSchema: z.object({
         id: z.number().int().positive().describe("Page ID"),
         recursive: z.boolean().default(true).describe("Free children too"),
       }),
@@ -110,7 +110,7 @@ export function createTools() {
 
     page_move: tool({
       description: "Move a page under a new parent or to root.",
-      parameters: z.object({
+      inputSchema: z.object({
         id: z.number().int().positive().describe("Page ID"),
         new_parent_id: z.number().int().positive().optional().describe("New parent ID, omit for root"),
       }),
@@ -122,7 +122,7 @@ export function createTools() {
 
     page_merge: tool({
       description: "Merge source pages into a target page, then free the sources.",
-      parameters: z.object({
+      inputSchema: z.object({
         source_ids: z.array(z.number().int().positive()).min(1).describe("Source page IDs"),
         target_id: z.number().int().positive().describe("Target page ID"),
         strategy: z.enum(["concatenate", "provided"]).default("concatenate"),
@@ -143,9 +143,9 @@ export interface AgentOptions {
 }
 
 export async function runAgent(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   options: AgentOptions
-): Promise<{ messages: CoreMessage[]; response: string }> {
+): Promise<{ messages: ModelMessage[]; response: string }> {
   const maxSteps = options.maxSteps || 10;
 
   const result = await generateText({
@@ -153,19 +153,19 @@ export async function runAgent(
     system: SYSTEM_PROMPT,
     messages,
     tools: createTools(),
-    maxSteps,
+    stopWhen: stepCountIs(maxSteps),
   });
 
-  let updatedMessages = [...messages, ...result.response.messages];
+  let updatedMessages: ModelMessage[] = [...messages, ...result.response.messages];
 
   for (const step of result.steps) {
     for (const toolResult of step.toolResults) {
       if (
         toolResult.toolName === "page_out" &&
-        typeof toolResult.result === "object" &&
-        toolResult.result !== null
+        typeof toolResult.output === "object" &&
+        toolResult.output !== null
       ) {
-        const res = toolResult.result as {
+        const res = toolResult.output as {
           result: string;
           _swap?: number;
           _title?: string;

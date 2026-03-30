@@ -1,4 +1,4 @@
-import type { CoreMessage } from "ai";
+import type { ModelMessage } from "ai";
 import {
   ensureRoot,
   getNextId,
@@ -205,12 +205,12 @@ export async function handlePageMerge(args: {
 // --- Context paging operations ---
 
 export function swapOut(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   pageId: number,
   title: string,
   summary: string,
   swapCount?: number
-): CoreMessage[] {
+): ModelMessage[] {
   if (!swapCount || swapCount <= 0) return messages;
 
   const keepCount = Math.max(0, messages.length - swapCount);
@@ -225,11 +225,11 @@ export function swapOut(
 }
 
 export function swapIn(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   pageId: number,
   title: string,
   content: string
-): CoreMessage[] {
+): ModelMessage[] {
   return [
     ...messages,
     {

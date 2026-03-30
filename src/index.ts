@@ -2,7 +2,7 @@
 
 import "dotenv/config";
 import * as readline from "node:readline";
-import type { CoreMessage } from "ai";
+import type { ModelMessage } from "ai";
 import { runAgent } from "./agent.js";
 import { ensureRoot } from "./storage.js";
 import { resolveModel } from "./providers.js";
@@ -19,7 +19,7 @@ async function main() {
     output: process.stdout,
   });
 
-  let messages: CoreMessage[] = [];
+  let messages: ModelMessage[] = [];
 
   console.log("Context Paging Agent");
   console.log("Virtual memory for AI context. The agent pages context in and out on demand.");

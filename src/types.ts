@@ -1,4 +1,4 @@
-import type { CoreMessage } from "ai";
+import type { ModelMessage } from "ai";
 
 export interface PageMeta {
   id: number;
@@ -20,6 +20,6 @@ export interface CounterData {
 }
 
 export interface ConversationState {
-  messages: CoreMessage[];
+  messages: ModelMessage[];
   pagesPendingSwap: number[];
 }
