@@ -13,10 +13,10 @@ import {
   buildTree,
   movePageDir,
   isDescendantOf,
+  getRoot,
 } from "./storage.js";
 import { formatPageTable } from "./toc.js";
 import type { PageMeta } from "./types.js";
-import path from "node:path";
 
 // --- Page operations (called by tool handlers) ---
 
@@ -145,8 +145,7 @@ export async function handlePageMove(args: {
     }
     targetParentDir = parentDir;
   } else {
-    targetParentDir = path.resolve(process.env.PAGES_ROOT || "./pages");
-
+    targetParentDir = getRoot();
   }
 
   await movePageDir(sourceDir, targetParentDir);
