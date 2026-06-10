@@ -1,9 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PageMeta, PageNode, CounterData } from "./types.js";
 
+const rootStorage = new AsyncLocalStorage<string>();
+
+export function withPagesRoot<T>(rootDir: string, fn: () => Promise<T>): Promise<T> {
+  return rootStorage.run(path.resolve(rootDir), fn);
+}
+
 function root(): string {
+  const scoped = rootStorage.getStore();
+  if (scoped) return scoped;
   return path.resolve(process.env.PAGES_ROOT || "./pages");
+}
+
+export function getRoot(): string {
+  return root();
 }
 
 export async function ensureRoot(): Promise<void> {

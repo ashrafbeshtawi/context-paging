@@ -2,4 +2,10 @@ node_modules/
 build/
 .claude/
 pages/
+pages-web/
 .env
+
+# Next.js
+web/.next/
+web/out/
+*.tsbuildinfo

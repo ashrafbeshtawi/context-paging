@@ -185,6 +185,24 @@ npm test          # run all tests
 npm run test:watch  # watch mode
 ```
 
+## Web Chat Interface
+
+A Next.js chat UI lives in `web/`. It lets you start multiple chat sessions, watch tool calls and the live context window state side-by-side.
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Then visit http://localhost:3000. Each session gets its own page directory under `pages-web/<session-id>/`.
+
+Tests for the web layer:
+```bash
+cd web
+npm test
+```
+
 ## Contributing
 
 This is an early-stage research project and contributions are very welcome. Here's how you can help:
