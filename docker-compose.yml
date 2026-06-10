@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: context-paging-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-context_paging}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-context_paging}
+      POSTGRES_DB: ${PG_DATABASE:-context_paging}
+    ports:
+      - "${PG_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-context_paging} -d ${PG_DATABASE:-context_paging}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  flyway:
+    image: flyway/flyway:10-alpine
+    container_name: context-paging-flyway
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:-context_paging}
+      FLYWAY_USER: ${PG_USER:-context_paging}
+      FLYWAY_PASSWORD: ${PG_PASSWORD:-context_paging}
+      FLYWAY_CONNECT_RETRIES: "30"
+    volumes:
+      - ./migrations:/flyway/sql:ro
+    command: ["migrate"]
+
+volumes:
+  postgres-data:
+    name: context-paging-postgres-data

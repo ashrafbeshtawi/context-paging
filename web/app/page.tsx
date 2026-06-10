@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import SessionsSidebar from "@/components/SessionsSidebar";
-import ChatPanel, { type ChatTurn, type ToolEvent } from "@/components/ChatPanel";
+import ChatPanel, { type ChatTurn } from "@/components/ChatPanel";
 import ContextSidebar from "@/components/ContextSidebar";
+import SettingsModal from "@/components/SettingsModal";
 import type { SessionSummary } from "@/lib/sessions";
 import type { ContextView } from "@/lib/context-view";
 import type { PageTableEntry } from "@/lib/page-table";
 import { parseSseStream } from "@/lib/sse";
+import { EMPTY_CONFIG, type LlmConfig, loadConfig, toRequestBody } from "@/lib/llm-config";
 
 export default function Home() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -16,6 +18,12 @@ export default function Home() {
   const [context, setContext] = useState<ContextView | null>(null);
   const [pageTable, setPageTable] = useState<PageTableEntry[]>([]);
   const [busy, setBusy] = useState(false);
+  const [llmConfig, setLlmConfig] = useState<LlmConfig>(EMPTY_CONFIG);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    setLlmConfig(loadConfig());
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     const r = await fetch("/api/sessions");
@@ -61,7 +69,11 @@ export default function Home() {
         const resp = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: activeId, message: msg }),
+          body: JSON.stringify({
+            sessionId: activeId,
+            message: msg,
+            ...toRequestBody(llmConfig),
+          }),
         });
         if (!resp.ok || !resp.body) {
           const err = await resp.text();
@@ -105,8 +117,11 @@ export default function Home() {
         refreshSessions();
       }
     },
-    [activeId, refreshSessions]
+    [activeId, llmConfig, refreshSessions]
   );
+
+  const customConfigured =
+    Boolean(llmConfig.apiKey) || Boolean(llmConfig.provider) || Boolean(llmConfig.model);
 
   return (
     <main className="layout">
@@ -115,9 +130,16 @@ export default function Home() {
         activeId={activeId}
         onSelect={loadSession}
         onCreate={createSession}
+        onOpenSettings={() => setSettingsOpen(true)}
+        settingsBadge={customConfigured ? "custom" : "env"}
       />
       <ChatPanel turns={turns} onSend={send} disabled={busy || !activeId} />
       <ContextSidebar context={context} pageTable={pageTable} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChange={setLlmConfig}
+      />
     </main>
   );
 }

@@ -1,208 +1,158 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { PageMeta, PageNode, CounterData } from "./types.js";
+import { query } from "./db.js";
+import type { PageNode, PageRow } from "./types.js";
 
-const rootStorage = new AsyncLocalStorage<string>();
+const sessionStorage = new AsyncLocalStorage<string>();
 
-export function withPagesRoot<T>(rootDir: string, fn: () => Promise<T>): Promise<T> {
-  return rootStorage.run(path.resolve(rootDir), fn);
+export function withSession<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  return sessionStorage.run(sessionId, fn);
 }
 
-function root(): string {
-  const scoped = rootStorage.getStore();
-  if (scoped) return scoped;
-  return path.resolve(process.env.PAGES_ROOT || "./pages");
-}
-
-export function getRoot(): string {
-  return root();
-}
-
-export async function ensureRoot(): Promise<void> {
-  await fs.mkdir(root(), { recursive: true });
-}
-
-// --- Counter ---
-
-async function counterPath(): Promise<string> {
-  return path.join(root(), "_counter.json");
-}
-
-export async function getNextId(): Promise<number> {
-  const cp = await counterPath();
-  let data: CounterData;
-  try {
-    const raw = await fs.readFile(cp, "utf-8");
-    data = JSON.parse(raw) as CounterData;
-  } catch {
-    data = { next_id: 1 };
+export function currentSessionId(): string {
+  const id = sessionStorage.getStore();
+  if (!id) {
+    throw new Error(
+      "No session in context. Wrap calls in withSession(sessionId, ...) before invoking page operations."
+    );
   }
-  const id = data.next_id;
-  data.next_id = id + 1;
-  await fs.writeFile(cp, JSON.stringify(data, null, 2));
   return id;
 }
 
-// --- Finding pages ---
+// --- Page CRUD ---
 
-export async function findPageDir(
-  id: number,
-  searchDir?: string
-): Promise<string | null> {
-  const dir = searchDir || root();
-  let entries;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return null;
+export async function insertPage(args: {
+  title: string;
+  summary: string;
+  content: string;
+  parentPageNo?: number;
+  isResident?: boolean;
+}): Promise<PageRow> {
+  const sessionId = currentSessionId();
+
+  let parentId: number | null = null;
+  if (args.parentPageNo !== undefined) {
+    const parent = await getPageByNo(args.parentPageNo);
+    if (!parent) throw new Error(`Parent page ${args.parentPageNo} not found`);
+    parentId = parent.id;
   }
 
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
-    const entryPath = path.join(dir, entry.name);
-
-    if (entry.name === String(id)) {
-      try {
-        await fs.access(path.join(entryPath, "meta.json"));
-        return entryPath;
-      } catch {
-        // Not a page dir, continue searching inside
-      }
-    }
-
-    const found = await findPageDir(id, entryPath);
-    if (found) return found;
-  }
-
-  return null;
+  // Per-session monotonically increasing page_no. We compute the next value
+  // inside the INSERT so a unique violation on (session_id, page_no) cannot
+  // happen even with concurrent inserts (the COALESCE+MAX is evaluated in
+  // the same statement that takes the lock).
+  const sql = `
+    INSERT INTO pages (session_id, page_no, parent_id, title, summary, content, is_resident)
+    VALUES ($1,
+            (SELECT COALESCE(MAX(page_no), 0) + 1 FROM pages WHERE session_id = $1),
+            $2, $3, $4, $5, $6)
+    RETURNING *
+  `;
+  const res = await query<PageRow>(sql, [
+    sessionId,
+    parentId,
+    args.title,
+    args.summary,
+    args.content,
+    args.isResident ?? false,
+  ]);
+  return res.rows[0];
 }
 
-// --- Reading ---
-
-export async function readMeta(pageDir: string): Promise<PageMeta> {
-  const raw = await fs.readFile(path.join(pageDir, "meta.json"), "utf-8");
-  return JSON.parse(raw) as PageMeta;
-}
-
-export async function readContent(pageDir: string): Promise<string> {
-  try {
-    return await fs.readFile(path.join(pageDir, "content.md"), "utf-8");
-  } catch {
-    return "";
-  }
-}
-
-// --- Writing ---
-
-export async function writeMeta(
-  pageDir: string,
-  meta: PageMeta
-): Promise<void> {
-  await fs.writeFile(
-    path.join(pageDir, "meta.json"),
-    JSON.stringify(meta, null, 2)
+export async function getPageByNo(pageNo: number): Promise<PageRow | null> {
+  const sessionId = currentSessionId();
+  const res = await query<PageRow>(
+    "SELECT * FROM pages WHERE session_id = $1 AND page_no = $2",
+    [sessionId, pageNo]
   );
+  return res.rows[0] || null;
 }
 
-export async function writeContent(
-  pageDir: string,
-  content: string
-): Promise<void> {
-  await fs.writeFile(path.join(pageDir, "content.md"), content);
+export async function getPageById(id: number): Promise<PageRow | null> {
+  const sessionId = currentSessionId();
+  const res = await query<PageRow>(
+    "SELECT * FROM pages WHERE id = $1 AND session_id = $2",
+    [id, sessionId]
+  );
+  return res.rows[0] || null;
 }
 
-// --- Creating ---
-
-export async function createPageDir(
-  id: number,
-  parentId?: number
-): Promise<string> {
-  let parentDir: string;
-  if (parentId !== undefined) {
-    const found = await findPageDir(parentId);
-    if (!found) throw new Error(`Parent page ${parentId} not found`);
-    parentDir = found;
-  } else {
-    parentDir = root();
+export async function getChildren(parentId: number | null): Promise<PageRow[]> {
+  const sessionId = currentSessionId();
+  if (parentId === null) {
+    const res = await query<PageRow>(
+      "SELECT * FROM pages WHERE session_id = $1 AND parent_id IS NULL ORDER BY page_no",
+      [sessionId]
+    );
+    return res.rows;
   }
-
-  const pageDir = path.join(parentDir, String(id));
-  await fs.mkdir(pageDir, { recursive: true });
-  return pageDir;
+  const res = await query<PageRow>(
+    "SELECT * FROM pages WHERE session_id = $1 AND parent_id = $2 ORDER BY page_no",
+    [sessionId, parentId]
+  );
+  return res.rows;
 }
 
-// --- Deleting ---
-
-export async function deletePageDir(pageDir: string): Promise<void> {
-  await fs.rm(pageDir, { recursive: true, force: true });
-}
-
-// --- Getting children ---
-
-export async function getChildPageDirs(
-  parentDir: string
-): Promise<string[]> {
-  const children: string[] = [];
-  let entries;
-  try {
-    entries = await fs.readdir(parentDir, { withFileTypes: true });
-  } catch {
-    return children;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
-    const entryPath = path.join(parentDir, entry.name);
-    try {
-      await fs.access(path.join(entryPath, "meta.json"));
-      children.push(entryPath);
-    } catch {
-      // Not a page
-    }
-  }
-  return children;
-}
-
-// --- Building tree ---
-
-export async function buildTree(dir?: string): Promise<PageNode[]> {
-  const searchDir = dir || root();
-  const childDirs = await getChildPageDirs(searchDir);
+export async function buildTree(rootParentId: number | null = null): Promise<PageNode[]> {
+  const rows = await getChildren(rootParentId);
   const nodes: PageNode[] = [];
-
-  for (const childDir of childDirs) {
-    const meta = await readMeta(childDir);
-    const children = await buildTree(childDir);
-    nodes.push({ meta, children, path: childDir });
+  for (const row of rows) {
+    const children = await buildTree(row.id);
+    nodes.push({ row, children });
   }
-
-  nodes.sort((a, b) => a.meta.id - b.meta.id);
   return nodes;
 }
 
-// --- Moving ---
+export async function updatePage(
+  id: number,
+  patch: { title?: string; summary?: string; content?: string; isResident?: boolean }
+): Promise<PageRow | null> {
+  const sessionId = currentSessionId();
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  if (patch.title !== undefined) { sets.push(`title = $${i++}`); values.push(patch.title); }
+  if (patch.summary !== undefined) { sets.push(`summary = $${i++}`); values.push(patch.summary); }
+  if (patch.content !== undefined) { sets.push(`content = $${i++}`); values.push(patch.content); }
+  if (patch.isResident !== undefined) { sets.push(`is_resident = $${i++}`); values.push(patch.isResident); }
+  if (sets.length === 0) return getPageById(id);
 
-export async function movePageDir(
-  sourceDir: string,
-  targetParentDir: string
-): Promise<string> {
-  const dirName = path.basename(sourceDir);
-  const destDir = path.join(targetParentDir, dirName);
-  await fs.rename(sourceDir, destDir);
-  return destDir;
+  sets.push(`updated_at = NOW()`);
+  values.push(id, sessionId);
+
+  const sql = `UPDATE pages SET ${sets.join(", ")} WHERE id = $${i++} AND session_id = $${i} RETURNING *`;
+  const res = await query<PageRow>(sql, values);
+  return res.rows[0] || null;
 }
 
-// --- Ancestry check ---
+export async function deletePage(id: number): Promise<boolean> {
+  const sessionId = currentSessionId();
+  const res = await query(
+    "DELETE FROM pages WHERE id = $1 AND session_id = $2",
+    [id, sessionId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
 
 export async function isDescendantOf(
-  pageId: number,
-  potentialAncestorDir: string
+  candidateAncestorId: number,
+  pageId: number
 ): Promise<boolean> {
-  const children = await getChildPageDirs(potentialAncestorDir);
-  for (const childDir of children) {
-    const meta = await readMeta(childDir);
-    if (meta.id === pageId) return true;
-    if (await isDescendantOf(pageId, childDir)) return true;
+  // Walk up from pageId via parent_id and return true if we ever hit candidateAncestorId.
+  // Scoped to the current session by getPageById.
+  let current = await getPageById(pageId);
+  while (current) {
+    if (current.parent_id === candidateAncestorId) return true;
+    if (current.parent_id === null) return false;
+    current = await getPageById(current.parent_id);
   }
   return false;
+}
+
+export async function setParent(id: number, newParentId: number | null): Promise<PageRow | null> {
+  const sessionId = currentSessionId();
+  const res = await query<PageRow>(
+    "UPDATE pages SET parent_id = $1, updated_at = NOW() WHERE id = $2 AND session_id = $3 RETURNING *",
+    [newParentId, id, sessionId]
+  );
+  return res.rows[0] || null;
 }

@@ -4,8 +4,12 @@ import "dotenv/config";
 import * as readline from "node:readline";
 import type { ModelMessage } from "ai";
 import { runAgent } from "./agent.js";
-import { ensureRoot } from "./storage.js";
+import { withSession } from "./storage.js";
 import { resolveModel } from "./providers.js";
+import { getOrCreateSession, getMessages, replaceMessages } from "./sessions.js";
+import { closePool } from "./db.js";
+
+const CLI_SESSION_ID = process.env.CLI_SESSION_ID || "cli-default";
 
 const DEBUG = process.env.DEBUG === "true" || process.env.DEBUG === "1";
 
@@ -52,18 +56,18 @@ function debugContextStats(messages: ModelMessage[]) {
 }
 
 async function main() {
-  await ensureRoot();
-
   const model = await resolveModel();
   const provider = process.env.AI_PROVIDER || "anthropic";
   const modelId = process.env.AI_MODEL || "(default)";
+
+  await getOrCreateSession({ id: CLI_SESSION_ID, title: "CLI session" });
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
-  let messages: ModelMessage[] = [];
+  let messages: ModelMessage[] = await getMessages(CLI_SESSION_ID);
 
   console.log("Context Paging Agent");
   console.log("Virtual memory for AI context. The agent pages context in and out on demand.");
@@ -77,6 +81,7 @@ async function main() {
       if (trimmed.toLowerCase() === "quit") {
         console.log("Goodbye.");
         rl.close();
+        await closePool();
         return;
       }
 
@@ -90,28 +95,31 @@ async function main() {
       try {
         process.stdout.write("\nAssistant: ");
 
-        const result = await runAgent(messages, {
-          model,
-          debug: DEBUG,
-          onText(chunk) {
-            process.stdout.write(chunk);
-          },
-          onToolCall(toolName, args) {
-            if (DEBUG) {
-              console.log(`\n\x1b[33m[TOOL CALL] ${toolName}\x1b[0m`);
-              console.log(`\x1b[90m  args: ${JSON.stringify(args, null, 2).split("\n").join("\n  ")}\x1b[0m`);
-            }
-          },
-          onToolResult(toolName, output) {
-            if (DEBUG) {
-              const preview = JSON.stringify(output);
-              const truncated = preview.length > 200 ? preview.slice(0, 200) + "..." : preview;
-              console.log(`\x1b[32m[TOOL RESULT] ${toolName} → ${truncated}\x1b[0m`);
-            }
-          },
-        });
+        const result = await withSession(CLI_SESSION_ID, () =>
+          runAgent(messages, {
+            model,
+            debug: DEBUG,
+            onText(chunk) {
+              process.stdout.write(chunk);
+            },
+            onToolCall(toolName, args) {
+              if (DEBUG) {
+                console.log(`\n\x1b[33m[TOOL CALL] ${toolName}\x1b[0m`);
+                console.log(`\x1b[90m  args: ${JSON.stringify(args, null, 2).split("\n").join("\n  ")}\x1b[0m`);
+              }
+            },
+            onToolResult(toolName, output) {
+              if (DEBUG) {
+                const preview = JSON.stringify(output);
+                const truncated = preview.length > 200 ? preview.slice(0, 200) + "..." : preview;
+                console.log(`\x1b[32m[TOOL RESULT] ${toolName} → ${truncated}\x1b[0m`);
+              }
+            },
+          })
+        );
 
         messages = result.messages;
+        await replaceMessages(CLI_SESSION_ID, messages);
         console.log("\n");
 
         debugContextStats(messages);

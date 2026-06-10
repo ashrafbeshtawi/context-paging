@@ -17,10 +17,10 @@ export async function getPageTable(): Promise<PageTableEntry[]> {
 
 function flatten(nodes: PageNode[], depth: number): PageTableEntry[] {
   return nodes.map((node) => ({
-    id: node.meta.id,
-    title: node.meta.title,
-    summary: node.meta.summary,
-    isResident: node.meta.is_resident,
+    id: node.row.page_no,
+    title: node.row.title,
+    summary: node.row.summary,
+    isResident: node.row.is_resident,
     depth,
     children: flatten(node.children, depth + 1),
   }));

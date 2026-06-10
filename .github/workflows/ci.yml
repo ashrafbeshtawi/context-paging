@@ -8,6 +8,26 @@ jobs:
   root:
     name: root — build & test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: context_paging
+          POSTGRES_PASSWORD: context_paging
+          POSTGRES_DB: context_paging
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U context_paging"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PG_HOST: localhost
+      PG_PORT: "5433"
+      PG_USER: context_paging
+      PG_PASSWORD: context_paging
+      PG_DATABASE: context_paging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,6 +36,14 @@ jobs:
           cache: npm
       - name: Install root deps
         run: npm ci
+      - name: Run Flyway migrations
+        run: |
+          docker run --rm --network host \
+            -e FLYWAY_URL=jdbc:postgresql://localhost:5433/context_paging \
+            -e FLYWAY_USER=context_paging \
+            -e FLYWAY_PASSWORD=context_paging \
+            -v "$GITHUB_WORKSPACE/migrations:/flyway/sql:ro" \
+            flyway/flyway:10-alpine migrate
       - name: Build TypeScript
         run: npm run build
       - name: Test
@@ -24,6 +52,26 @@ jobs:
   web:
     name: web — build & test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: context_paging
+          POSTGRES_PASSWORD: context_paging
+          POSTGRES_DB: context_paging
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U context_paging"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PG_HOST: localhost
+      PG_PORT: "5433"
+      PG_USER: context_paging
+      PG_PASSWORD: context_paging
+      PG_DATABASE: context_paging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,6 +83,14 @@ jobs:
       - name: Install web deps
         working-directory: web
         run: npm ci
+      - name: Run Flyway migrations
+        run: |
+          docker run --rm --network host \
+            -e FLYWAY_URL=jdbc:postgresql://localhost:5433/context_paging \
+            -e FLYWAY_USER=context_paging \
+            -e FLYWAY_PASSWORD=context_paging \
+            -v "$GITHUB_WORKSPACE/migrations:/flyway/sql:ro" \
+            flyway/flyway:10-alpine migrate
       - name: Test
         working-directory: web
         run: npm test

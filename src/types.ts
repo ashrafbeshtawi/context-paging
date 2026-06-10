@@ -1,22 +1,34 @@
 import type { ModelMessage } from "ai";
 
-export interface PageMeta {
+export interface PageRow {
   id: number;
+  session_id: string;
+  page_no: number;
+  parent_id: number | null;
   title: string;
   summary: string;
-  created_at: string;
-  updated_at: string;
+  content: string;
   is_resident: boolean;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface PageNode {
-  meta: PageMeta;
+  row: PageRow;
   children: PageNode[];
-  path: string;
 }
 
-export interface CounterData {
-  next_id: number;
+export interface SessionRow {
+  id: string;
+  title: string;
+  provider: string | null;
+  model: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface SessionWithMessages extends SessionRow {
+  messages: ModelMessage[];
 }
 
 export interface ConversationState {

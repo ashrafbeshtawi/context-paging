@@ -1,6 +1,6 @@
-import { getSession, pagesRootFor, updateMessages } from "@/lib/sessions";
+import { getSessionWithMessages, replaceMessages } from "@/lib/sessions";
 import { runAgent } from "@agent/agent";
-import { withPagesRoot } from "@agent/storage";
+import { withSession } from "@agent/storage";
 import { resolveModel } from "@agent/providers";
 import { buildContextView } from "@/lib/context-view";
 import { getPageTable } from "@/lib/page-table";
@@ -10,6 +10,9 @@ export const runtime = "nodejs";
 interface ChatRequest {
   sessionId: string;
   message: string;
+  apiKey?: string;
+  provider?: string;
+  model?: string;
 }
 
 export async function POST(req: Request) {
@@ -23,10 +26,9 @@ export async function POST(req: Request) {
     return badRequest("sessionId and message are required");
   }
 
-  const session = getSession(body.sessionId);
+  const session = await getSessionWithMessages(body.sessionId);
   if (!session) return badRequest("session not found", 404);
 
-  const pagesRoot = pagesRootFor(session.id);
   const userMessage = body.message.trim();
   const initialMessages = [...session.messages, { role: "user" as const, content: userMessage }];
 
@@ -38,9 +40,13 @@ export async function POST(req: Request) {
       };
 
       try {
-        const model = await resolveModel();
+        const model = await resolveModel({
+          provider: body.provider,
+          model: body.model,
+          apiKey: body.apiKey,
+        });
 
-        const finalMessages = await withPagesRoot(pagesRoot, async () => {
+        const finalMessages = await withSession(session.id, async () => {
           const result = await runAgent(initialMessages, {
             model,
             onText: (chunk) => send("text", { chunk }),
@@ -50,9 +56,9 @@ export async function POST(req: Request) {
           return result.messages;
         });
 
-        updateMessages(session.id, finalMessages);
+        await replaceMessages(session.id, finalMessages);
 
-        const pageTable = await withPagesRoot(pagesRoot, () => getPageTable());
+        const pageTable = await withSession(session.id, () => getPageTable());
         send("context", { context: buildContextView(finalMessages), pageTable });
         send("done", { ok: true });
       } catch (err) {
