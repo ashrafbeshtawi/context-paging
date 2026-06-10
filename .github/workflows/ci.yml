@@ -24,19 +24,20 @@ jobs:
   web:
     name: web — build & test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: web/package-lock.json
+      - name: Install root deps
+        run: npm ci
       - name: Install web deps
+        working-directory: web
         run: npm ci
       - name: Test
+        working-directory: web
         run: npm test
       - name: Build Next.js
+        working-directory: web
         run: npm run build

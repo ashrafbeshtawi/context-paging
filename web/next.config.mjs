@@ -1,7 +1,12 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const webDir = path.dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  outputFileTracingRoot: new URL(".", import.meta.url).pathname,
+  outputFileTracingRoot: webDir,
   experimental: {
     externalDir: true,
   },
@@ -11,6 +16,10 @@ const nextConfig = {
       ...(config.resolve.extensionAlias || {}),
       ".js": [".ts", ".tsx", ".js"],
     };
+    config.resolve.modules = [
+      path.resolve(webDir, "node_modules"),
+      "node_modules",
+    ];
     return config;
   },
 };
