@@ -91,7 +91,7 @@ The DB listens on port 5433 by default to avoid clashing with any local Postgres
 
 Edit `.env`:
 ```bash
-AI_PROVIDER=anthropic          # or: openai, google, mistral, xai, azure, amazon-bedrock
+AI_PROVIDER=anthropic          # or: openai, google, mistral, xai, azure, amazon-bedrock, openrouter
 AI_MODEL=claude-sonnet-4-20250514  # optional, defaults per provider
 ANTHROPIC_API_KEY=sk-ant-...   # set the key matching your provider
 ```
@@ -139,6 +139,9 @@ Assistant: Starting fresh. I can page in the auth work later.
 | xAI | `xai` | `@ai-sdk/xai` | `XAI_API_KEY` | `grok-3` |
 | Amazon Bedrock | `amazon-bedrock` | `@ai-sdk/amazon-bedrock` | AWS credentials | — |
 | Azure OpenAI | `azure` | `@ai-sdk/azure` | `AZURE_API_KEY` | — |
+| OpenRouter | `openrouter` | `@openrouter/ai-sdk-provider` | `OPENROUTER_API_KEY` | `openrouter/auto` |
+
+OpenRouter is a meta-provider: one API key gives access to models from all major vendors via slugs like `anthropic/claude-sonnet-4` or `openai/gpt-4o`. Its SDK package is pinned to v2 (v3+ requires `ai@7`).
 
 ## Debug Mode
 
@@ -179,7 +182,7 @@ context-paging/
     agent.ts            # Agent core: LLM calls, tools, swap logic
     providers.ts        # Dynamic provider resolution
     context-manager.ts  # Page operations + swapOut / swapIn
-    storage.ts          # Filesystem operations
+    storage.ts          # PostgreSQL page storage (session-scoped)
     toc.ts              # Page table formatter
     types.ts            # TypeScript interfaces
   tests/
@@ -199,15 +202,27 @@ npm run test:watch  # watch mode
 
 ## Web Chat Interface
 
-A Next.js chat UI lives in `web/`. It lets you start multiple chat sessions, watch tool calls and the live context window state side-by-side.
+A Next.js chat UI lives in `web/`. It lets you start multiple chat sessions, watch tool calls and the live context window state side-by-side. Sessions, messages, and pages are persisted per-session in PostgreSQL.
+
+**Option A — run everything in Docker:**
 
 ```bash
+docker compose up -d web
+```
+
+This builds the web image, starts Postgres, applies migrations, and serves the UI on http://localhost:3000 (override with `WEB_PORT`). API keys from your `.env` are passed through to the container; you can also enter a key in the UI's Settings modal instead — it is sent per-request and never persisted server-side. The image ships with the `anthropic`, `mistral`, and `openrouter` provider SDKs; via OpenRouter you can reach the other vendors' models with a single key.
+
+**Option B — local dev server:**
+
+```bash
+docker compose up -d postgres
+docker compose run --rm flyway
 cd web
 npm install
 npm run dev
 ```
 
-Then visit http://localhost:3000. Each session gets its own page directory under `pages-web/<session-id>/`.
+Then visit http://localhost:3000.
 
 Tests for the web layer:
 ```bash

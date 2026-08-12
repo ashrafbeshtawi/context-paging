@@ -26,6 +26,7 @@ docker compose run --rm flyway   # apply migrations
 - `npm run dev` — Next.js dev server on :3000
 - `npm run build` / `npm start`
 - `npm test` — vitest with jsdom + @vitejs/plugin-react (requires DB up)
+- `docker compose up -d web` (from repo root) — containerized web UI on :3000; builds `web/Dockerfile` with the **repo root as build context** (the image needs `../src`), starts Postgres, and runs Flyway first via `depends_on`.
 
 Both vitest configs use `fileParallelism: false` — tests share a single Postgres database and reset it between cases, so they cannot run in parallel. The root `vitest.config.ts` has `include: ["tests/**/*.test.ts"]` so it does not pick up `web/tests/`.
 
@@ -43,7 +44,7 @@ The data flow is a loop, and the key invariant is that **the agent code owns the
 
 4. **`src/storage.ts`** — Filesystem layer. Pages live as directories under `PAGES_ROOT` (default `./pages`), named by ID, each containing `meta.json` + `content.md`. **Nesting is real directory nesting**, not metadata — moving a page is `fs.rename`, and `findPageDir` recursively descends. ID allocation goes through `_counter.json` at the root. The leading `_` prefix is what distinguishes the counter file from page directories during tree walks.
 
-5. **`src/providers.ts`** — Dynamic provider resolution. The user chooses `AI_PROVIDER` (`anthropic`, `openai`, `google`, `mistral`, `xai`, `amazon-bedrock`, `azure`), and we `await import(...)` the matching `@ai-sdk/*` package at runtime. Provider SDKs are intentionally **not** all listed as direct dependencies — `bin/start.sh` installs the one you need on first run. Only `@ai-sdk/mistral` is in `dependencies` and `@ai-sdk/anthropic` is in `devDependencies` for tests/CI.
+5. **`src/providers.ts`** — Dynamic provider resolution. The user chooses `AI_PROVIDER` (`anthropic`, `openai`, `google`, `mistral`, `xai`, `amazon-bedrock`, `azure`, `openrouter`), and we `await import(...)` the matching SDK package at runtime. Provider SDKs are intentionally **not** all listed as direct dependencies — `bin/start.sh` installs the one you need on first run. Only `@ai-sdk/mistral` and `@openrouter/ai-sdk-provider` are in `dependencies` and `@ai-sdk/anthropic` is in `devDependencies` for tests/CI. **The OpenRouter package must stay pinned to `^2`** — v3+ requires `ai@7` while this project is on `ai@6`.
 
 6. **`src/toc.ts`** — Pure formatter for the page table. Recursive, indent-based; outputs the `Page N: "title" [resident|swapped] — summary` lines the model sees.
 

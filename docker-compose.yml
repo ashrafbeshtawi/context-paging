@@ -32,6 +32,37 @@ services:
       - ./migrations:/flyway/sql:ro
     command: ["migrate"]
 
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: context-paging-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: ${PG_USER:-context_paging}
+      PG_PASSWORD: ${PG_PASSWORD:-context_paging}
+      PG_DATABASE: ${PG_DATABASE:-context_paging}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      AI_MODEL: ${AI_MODEL:-}
+      # Server-side fallback keys; the web UI can also supply a key
+      # per-request from the browser (Settings modal).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      AZURE_API_KEY: ${AZURE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
 volumes:
   postgres-data:
     name: context-paging-postgres-data

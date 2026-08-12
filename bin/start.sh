@@ -27,9 +27,10 @@ case "$PROVIDER" in
   xai)            PACKAGE="@ai-sdk/xai" ;;
   amazon-bedrock) PACKAGE="@ai-sdk/amazon-bedrock" ;;
   azure)          PACKAGE="@ai-sdk/azure" ;;
+  openrouter)     PACKAGE="@openrouter/ai-sdk-provider" ;;
   *)
     echo "Error: Unknown provider '$PROVIDER'"
-    echo "Supported: anthropic | openai | google | mistral | xai | amazon-bedrock | azure"
+    echo "Supported: anthropic | openai | google | mistral | xai | amazon-bedrock | azure | openrouter"
     exit 1
     ;;
 esac
