@@ -62,12 +62,19 @@ async function main() {
 
   await getOrCreateSession({ id: CLI_SESSION_ID, title: "CLI session" });
 
+  let messages: ModelMessage[] = await getMessages(CLI_SESSION_ID);
+
+  // Created only after all async setup: with piped (non-TTY) stdin, EOF
+  // closes the interface as soon as input is exhausted, and rl.question
+  // on a closed interface throws ERR_USE_AFTER_CLOSE.
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
-
-  let messages: ModelMessage[] = await getMessages(CLI_SESSION_ID);
+  let stdinClosed = false;
+  rl.on("close", () => {
+    stdinClosed = true;
+  });
 
   console.log("Context Paging Agent");
   console.log("Virtual memory for AI context. The agent pages context in and out on demand.");
@@ -76,6 +83,10 @@ async function main() {
   console.log('Type "quit" to exit.\n');
 
   const prompt = () => {
+    if (stdinClosed) {
+      void closePool();
+      return;
+    }
     rl.question("You: ", async (input) => {
       const trimmed = input.trim();
       if (trimmed.toLowerCase() === "quit") {

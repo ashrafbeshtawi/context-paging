@@ -1,6 +1,6 @@
 import type { LanguageModel } from "ai";
 
-export type ProviderName = "anthropic" | "openai" | "google" | "mistral" | "amazon-bedrock" | "azure" | "xai";
+export type ProviderName = "anthropic" | "openai" | "google" | "mistral" | "amazon-bedrock" | "azure" | "xai" | "openrouter";
 
 interface ProviderConfig {
   package: string;
@@ -18,6 +18,8 @@ const PROVIDERS: Record<ProviderName, ProviderConfig> = {
   "amazon-bedrock": { package: "@ai-sdk/amazon-bedrock", exportName: "bedrock", createName: "createAmazonBedrock" },
   azure: { package: "@ai-sdk/azure", exportName: "azure", createName: "createAzure" },
   xai: { package: "@ai-sdk/xai", exportName: "xai", createName: "createXai" },
+  // Pinned to v2 — v3+ of the OpenRouter provider requires ai@^7.
+  openrouter: { package: "@openrouter/ai-sdk-provider", exportName: "openrouter", createName: "createOpenRouter" },
 };
 
 const DEFAULT_MODELS: Partial<Record<ProviderName, string>> = {
@@ -26,6 +28,7 @@ const DEFAULT_MODELS: Partial<Record<ProviderName, string>> = {
   google: "gemini-2.0-flash",
   mistral: "mistral-large-latest",
   xai: "grok-3",
+  openrouter: "openrouter/auto",
 };
 
 export interface ResolveModelOptions {
@@ -46,7 +49,9 @@ export async function resolveModel(opts: ResolveModelOptions = {}): Promise<Lang
 
   let providerModule: Record<string, unknown>;
   try {
-    providerModule = (await import(config.package)) as Record<string, unknown>;
+    // webpackIgnore keeps Next.js from trying to bundle this expression
+    // import — the provider package is resolved by Node at runtime instead.
+    providerModule = (await import(/* webpackIgnore: true */ config.package)) as Record<string, unknown>;
   } catch {
     throw new Error(
       `Provider "${providerName}" requires package "${config.package}". Install it:\n\n  npm install ${config.package}\n`

@@ -45,6 +45,28 @@ describe("resolveModel", () => {
     expect(model.modelId).toBe("claude-sonnet-4-20250514");
   });
 
+  it("resolves openrouter provider", async () => {
+    const model = await resolveModel({ provider: "openrouter", model: "anthropic/claude-sonnet-4" });
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("anthropic/claude-sonnet-4");
+  });
+
+  it("openrouter defaults to the auto-router model", async () => {
+    delete process.env.AI_MODEL;
+    const model = await resolveModel({ provider: "openrouter" });
+    expect(model.modelId).toBe("openrouter/auto");
+  });
+
+  it("openrouter apiKey override uses the createOpenRouter factory", async () => {
+    const model = await resolveModel({
+      provider: "openrouter",
+      model: "openrouter/auto",
+      apiKey: "test-key-not-real",
+    });
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("openrouter/auto");
+  });
+
   it("apiKey override uses the create-factory when SDK provides one", async () => {
     // Anthropic SDK exposes createAnthropic. Passing apiKey should succeed
     // without reading from env. We can't validate the actual key without

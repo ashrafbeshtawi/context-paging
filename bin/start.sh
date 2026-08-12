@@ -27,9 +27,10 @@ case "$PROVIDER" in
   xai)            PACKAGE="@ai-sdk/xai" ;;
   amazon-bedrock) PACKAGE="@ai-sdk/amazon-bedrock" ;;
   azure)          PACKAGE="@ai-sdk/azure" ;;
+  openrouter)     PACKAGE="@openrouter/ai-sdk-provider" ;;
   *)
     echo "Error: Unknown provider '$PROVIDER'"
-    echo "Supported: anthropic | openai | google | mistral | xai | amazon-bedrock | azure"
+    echo "Supported: anthropic | openai | google | mistral | xai | amazon-bedrock | azure | openrouter"
     exit 1
     ;;
 esac
@@ -37,6 +38,19 @@ esac
 echo "Provider: $PROVIDER"
 echo "Package:  $PACKAGE"
 echo ""
+
+# Bring up the database and apply migrations (idempotent if already running).
+# The CLI itself stays a local process — it is an interactive REPL on stdin.
+if command -v docker >/dev/null 2>&1; then
+  echo "Starting PostgreSQL via docker compose..."
+  docker compose up -d postgres
+  # </dev/null so the one-shot container doesn't swallow the CLI's stdin
+  docker compose run --rm -T flyway </dev/null
+  echo ""
+else
+  echo "Warning: docker not found — assuming PostgreSQL is already running on ${PG_HOST:-localhost}:${PG_PORT:-5433}"
+  echo ""
+fi
 
 # Install provider package if not already installed
 if [ ! -d "node_modules/$PACKAGE" ]; then
