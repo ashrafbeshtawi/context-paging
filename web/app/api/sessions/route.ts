@@ -4,7 +4,8 @@ import { createSession, listSessions } from "@/lib/sessions";
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json({ sessions: listSessions() });
+  const sessions = await listSessions();
+  return NextResponse.json({ sessions });
 }
 
 export async function POST(req: Request) {
@@ -15,6 +16,6 @@ export async function POST(req: Request) {
   } catch {
     // body is optional
   }
-  const session = createSession(title);
+  const session = await createSession({ title });
   return NextResponse.json({ session }, { status: 201 });
 }

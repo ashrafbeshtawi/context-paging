@@ -8,20 +8,26 @@ Context Paging is a custom AI agent (not an MCP server or plugin) that wraps any
 
 ## Commands
 
-Two packages — root (CLI agent) and `web/` (Next.js chat UI). Each has its own `package.json` and tests.
+Two packages — root (CLI agent) and `web/` (Next.js chat UI). Each has its own `package.json` and tests. **All tests require PostgreSQL to be running** (port 5433 by default).
+
+**Start the database first:**
+```bash
+docker compose up -d postgres
+docker compose run --rm flyway   # apply migrations
+```
 
 **Root:**
 - `npm run build` — TypeScript → `build/`
-- `npm start` / `./bin/start.sh` — run the CLI
+- `npm start` / `./bin/start.sh` — run the CLI (requires DB up)
 - `npm test` / `npm run test:watch`
 - Single test file: `npx vitest run tests/storage.test.ts`
 
 **Web (`cd web`):**
 - `npm run dev` — Next.js dev server on :3000
 - `npm run build` / `npm start`
-- `npm test` — vitest with jsdom + @vitejs/plugin-react
+- `npm test` — vitest with jsdom + @vitejs/plugin-react (requires DB up)
 
-Both vitest configs use `fileParallelism: false` — tests touch shared filesystem layout (root) or shared module state (web), so they cannot run in parallel. The root `vitest.config.ts` has `include: ["tests/**/*.test.ts"]` so it does not pick up `web/tests/`.
+Both vitest configs use `fileParallelism: false` — tests share a single Postgres database and reset it between cases, so they cannot run in parallel. The root `vitest.config.ts` has `include: ["tests/**/*.test.ts"]` so it does not pick up `web/tests/`.
 
 ## Architecture
 
@@ -50,21 +56,34 @@ The data flow is a loop, and the key invariant is that **the agent code owns the
 - **AI SDK v6** is in use (`ai@^6`). APIs like `streamText`, `tool`, `stepCountIs`, `ModelMessage`, `experimental_onToolCallStart/Finish` are v6 surface — earlier-version examples won't match.
 - **ESM + Node16 module resolution.** Local imports must use the `.js` extension even though source is `.ts` (see `tsconfig.json`).
 
+## Database
+
+PostgreSQL holds sessions, messages, and pages. Schema lives in `migrations/V001__initial_schema.sql` and is applied by Flyway via `docker compose run --rm flyway`. Three tables, all keyed by `session_id` so multiple sessions share the same physical DB cleanly:
+
+- **`sessions`** — `id (TEXT PK)`, `title`, `provider`, `model`, timestamps.
+- **`messages`** — `id BIGSERIAL`, `session_id` FK, `ordinal INT`, `role`, `content JSONB`. JSONB because AI SDK `ModelMessage.content` can be string OR array-of-parts.
+- **`pages`** — `id BIGSERIAL`, `session_id` FK, `page_no INT` (per-session, what the agent sees), `parent_id` (self-FK with `ON DELETE CASCADE` so freeing a parent recursively drops descendants), `title`, `summary`, `content`, `is_resident`, timestamps.
+
+**Key invariant:** in the agent's mental model, "Page 7" means `page_no = 7` *in the current session*. The DB surrogate `id` is internal — never expose it through tool args or the page table.
+
 ## Web layer (`web/`)
 
 Next.js 15 App Router + React 19. Imports the agent code from `../src/` via two mechanisms:
 - `tsconfig.json` paths: `@agent/*` → `../src/*`
 - `next.config.mjs` sets `experimental.externalDir: true` and a webpack `resolve.extensionAlias` so the agent's `.js` import extensions (required by Node ESM TS) resolve to `.ts` files at build time.
 
-**Per-session page isolation.** Each chat session gets its own `pages-web/<session-id>/` directory. This is implemented via `AsyncLocalStorage` in `src/storage.ts` — `withPagesRoot(rootDir, fn)` runs `fn` with a session-scoped root that overrides the env var. The `/api/chat` and `/api/sessions/[id]` routes wrap every storage-touching operation in `withPagesRoot(pagesRootFor(session.id), ...)`. **When adding any code that reads or writes pages from the web layer, you must wrap it in `withPagesRoot` or sessions will collide.**
+**Per-session storage scoping.** All page operations go through `withSession(sessionId, fn)` from `src/storage.ts` — an `AsyncLocalStorage` shim that scopes every SQL query to the active session. **When adding any code that reads or writes pages, wrap it in `withSession` or `currentSessionId()` will throw.** The same primitive is used by both the CLI and the web layer.
 
 **Streaming protocol.** `/api/chat` uses SSE. Events emitted: `text` (chunk), `tool-call`, `tool-result`, `context` (full ContextView + PageTable after the turn finishes), `done`, `error`. The client parser is `web/lib/sse.ts`. The agent's existing `onText`/`onToolCall`/`onToolResult` callbacks are wired straight into the SSE writer — no extra plumbing in `src/agent.ts`.
 
-**Session store** (`web/lib/sessions.ts`) is an in-memory `Map`. Lost on server restart. `resetForTests()` exists for test isolation. Page directories on disk are NOT cleaned up when a session is deleted — that's intentional for the demo (you can poke at the pages dir after the fact).
+**Per-request LLM credentials.** `/api/chat` accepts optional `apiKey`, `provider`, `model` in the request body. When supplied (from `web/lib/llm-config.ts`, sourced from `localStorage`), they override the server's `.env` for that request only — `resolveModel({...})` uses the SDK's `createX({apiKey})` factory when an apiKey is given, falling back to the singleton export (which reads env). The server never persists user-supplied credentials.
+
+**Session store** (`web/lib/sessions.ts`) re-exports the DB-backed implementation from `src/sessions.ts` so the CLI and web share a single source of truth.
 
 ## Environment
 
 - `AI_PROVIDER` / `AI_MODEL` — provider selection (see `.env.example` for full list).
-- Provider API key env var — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.
-- `PAGES_ROOT` — overrides the on-disk page storage directory (default `./pages`).
+- Provider API key env var — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc. The web UI can also pass these per-request from the browser; server env is the fallback.
+- `PG_HOST` / `PG_PORT` / `PG_USER` / `PG_PASSWORD` / `PG_DATABASE` — Postgres connection. Defaults match `docker-compose.yml`. Port is **5433** (not the default 5432) to avoid clashing with a local Postgres.
+- `CLI_SESSION_ID` — overrides the CLI's persistent session id (default `cli-default`).
 - `DEBUG=true` — enables the context-stats banner after every turn and verbose tool-call logging in `index.ts`.

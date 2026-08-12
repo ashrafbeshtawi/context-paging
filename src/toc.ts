@@ -5,10 +5,11 @@ export function formatPageTable(nodes: PageNode[], indent: number = 0): string {
   const prefix = "  ".repeat(indent);
 
   for (const node of nodes) {
-    const status = node.meta.is_resident ? "resident" : "swapped";
-    const summary = node.meta.summary ? ` — ${node.meta.summary}` : "";
+    const { row } = node;
+    const status = row.is_resident ? "resident" : "swapped";
+    const summary = row.summary ? ` — ${row.summary}` : "";
     lines.push(
-      `${prefix}Page ${node.meta.id}: "${node.meta.title}" [${status}]${summary}`
+      `${prefix}Page ${row.page_no}: "${row.title}" [${status}]${summary}`
     );
 
     if (node.children.length > 0) {

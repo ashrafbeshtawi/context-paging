@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSession, resetForTests } from "@/lib/sessions";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSession } from "@/lib/sessions";
 import { parseSseStream } from "@/lib/sse";
+import { closePool } from "@agent/db";
+import { resetDb } from "../../tests/helpers/db";
 
 vi.mock("@agent/providers", () => ({
   resolveModel: vi.fn(async () => ({ id: "mock-model" })),
@@ -33,24 +35,15 @@ async function readAllEvents(resp: Response) {
   return events;
 }
 
+beforeEach(async () => {
+  await resetDb();
+});
+
+afterAll(async () => {
+  await closePool();
+});
+
 describe("/api/chat route", () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    resetForTests();
-    const os = await import("node:os");
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ctx-paging-chat-"));
-    process.env.WEB_PAGES_ROOT = tmpDir;
-  });
-
-  afterEach(async () => {
-    const fs = await import("node:fs/promises");
-    await fs.rm(tmpDir, { recursive: true, force: true });
-    delete process.env.WEB_PAGES_ROOT;
-  });
-
   it("400s when sessionId is missing", async () => {
     const { POST } = await import("@/app/api/chat/route");
     const res = await POST(
@@ -73,8 +66,8 @@ describe("/api/chat route", () => {
     expect(res.status).toBe(404);
   });
 
-  it("streams text, tool events, context and done", async () => {
-    const s = createSession();
+  it("streams text, tool events, context, and done", async () => {
+    const s = await createSession();
     const { POST } = await import("@/app/api/chat/route");
     const res = await POST(
       new Request("http://localhost/api/chat", {
@@ -98,5 +91,34 @@ describe("/api/chat route", () => {
       .filter((e) => e.event === "text")
       .map((e) => (e.data as { chunk: string }).chunk);
     expect(textChunks.join("")).toBe("Hello world");
+  });
+
+  it("forwards apiKey/provider/model to resolveModel when provided", async () => {
+    const { resolveModel } = await import("@agent/providers");
+    const mockResolve = vi.mocked(resolveModel);
+    mockResolve.mockClear();
+
+    const s = await createSession();
+    const { POST } = await import("@/app/api/chat/route");
+    const res = await POST(
+      new Request("http://localhost/api/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: s.id,
+          message: "hi",
+          apiKey: "sk-test",
+          provider: "openai",
+          model: "gpt-4o-mini",
+        }),
+      })
+    );
+    // Drain the stream so the route's async work finishes.
+    await readAllEvents(res);
+
+    expect(mockResolve).toHaveBeenCalledWith({
+      apiKey: "sk-test",
+      provider: "openai",
+      model: "gpt-4o-mini",
+    });
   });
 });

@@ -1,61 +1,68 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createSession,
   deleteSession,
   getSession,
+  getOrCreateSession,
   listSessions,
-  pagesRootFor,
-  resetForTests,
-  updateMessages,
+  replaceMessages,
+  getMessages,
 } from "@/lib/sessions";
+import { closePool } from "@agent/db";
+import { resetDb } from "../../tests/helpers/db";
 
-describe("session store", () => {
-  beforeEach(() => resetForTests());
+beforeEach(async () => {
+  await resetDb();
+});
 
-  it("creates a session with a default title", () => {
-    const s = createSession();
-    expect(s.id).toMatch(/^s-/);
+afterAll(async () => {
+  await closePool();
+});
+
+describe("session store (DB-backed, accessed from web)", () => {
+  it("createSession uses default title", async () => {
+    const s = await createSession();
     expect(s.title).toBe("New chat");
-    expect(s.messages).toEqual([]);
+    expect(s.id).toMatch(/^s-/);
   });
 
-  it("uses the provided title when given", () => {
-    const s = createSession("Debugging auth");
+  it("createSession respects a provided title", async () => {
+    const s = await createSession({ title: "Debugging auth" });
     expect(s.title).toBe("Debugging auth");
   });
 
-  it("lists sessions newest-first by updatedAt", async () => {
-    const a = createSession("A");
-    await new Promise((r) => setTimeout(r, 2));
-    const b = createSession("B");
-    const list = listSessions();
-    expect(list.map((s) => s.id)).toEqual([b.id, a.id]);
+  it("listSessions returns newest-first by updated_at", async () => {
+    const a = await createSession({ title: "A" });
+    await new Promise((r) => setTimeout(r, 5));
+    const b = await createSession({ title: "B" });
+    const list = await listSessions();
+    expect(list[0].id).toBe(b.id);
+    expect(list[1].id).toBe(a.id);
   });
 
-  it("derives the title from the first user message when still default", () => {
-    const s = createSession();
-    updateMessages(s.id, [{ role: "user", content: "Help me debug this thing" }]);
-    expect(getSession(s.id)?.title).toBe("Help me debug this thing");
+  it("derives the title from the first user message when still default", async () => {
+    const s = await createSession();
+    await replaceMessages(s.id, [{ role: "user", content: "Help me debug this" }]);
+    expect((await getSession(s.id))?.title).toBe("Help me debug this");
   });
 
-  it("does not overwrite a custom title", () => {
-    const s = createSession("Custom");
-    updateMessages(s.id, [{ role: "user", content: "anything" }]);
-    expect(getSession(s.id)?.title).toBe("Custom");
+  it("does not overwrite a custom title", async () => {
+    const s = await createSession({ title: "Custom" });
+    await replaceMessages(s.id, [{ role: "user", content: "anything" }]);
+    expect((await getSession(s.id))?.title).toBe("Custom");
   });
 
-  it("deleteSession removes it", () => {
-    const s = createSession();
-    expect(deleteSession(s.id)).toBe(true);
-    expect(getSession(s.id)).toBeUndefined();
+  it("deleteSession removes the row and its messages", async () => {
+    const s = await createSession();
+    await replaceMessages(s.id, [{ role: "user", content: "x" }]);
+    expect(await deleteSession(s.id)).toBe(true);
+    expect(await getMessages(s.id)).toEqual([]);
   });
 
-  it("pagesRootFor scopes per session under the base dir", () => {
-    const root = pagesRootFor("abc", "/tmp/base");
-    expect(root).toBe("/tmp/base/abc");
-  });
-
-  it("updateMessages returns undefined for unknown id", () => {
-    expect(updateMessages("missing", [])).toBeUndefined();
+  it("getOrCreateSession does not duplicate", async () => {
+    const a = await getOrCreateSession({ id: "fixed-id", title: "First" });
+    const b = await getOrCreateSession({ id: "fixed-id", title: "Second" });
+    expect(a.id).toBe(b.id);
+    expect(b.title).toBe("First");
   });
 });

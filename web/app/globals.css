@@ -264,3 +264,97 @@ input, textarea {
   font-size: 11px;
   font-style: italic;
 }
+
+/* === Settings modal === */
+.settings-btn {
+  margin: 0 10px 10px;
+  padding: 6px 10px;
+  background: #1f2228;
+  color: #aaa;
+  border: 1px solid #2a2d34;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.settings-btn .badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  color: #34d399;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #16181c;
+  border: 1px solid #2a2d34;
+  border-radius: 6px;
+  padding: 20px 22px;
+  width: min(440px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 14px;
+  color: #fff;
+}
+
+.modal .help {
+  color: #888;
+  font-size: 11px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.modal input,
+.modal select {
+  background: #0e0f12;
+  border: 1px solid #2a2d34;
+  color: #e6e6e6;
+  border-radius: 4px;
+  padding: 7px 9px;
+}
+
+.modal .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.modal button {
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.modal button.ghost {
+  background: transparent;
+  color: #aaa;
+  border-color: #2a2d34;
+}
+
+.modal button.primary {
+  background: #2563eb;
+  color: white;
+  border: none;
+}

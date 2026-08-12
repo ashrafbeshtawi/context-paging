@@ -1,7 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 import {
   handlePageOut,
@@ -14,408 +11,375 @@ import {
   swapOut,
   swapIn,
 } from "../src/context-manager.js";
-import { ensureRoot, findPageDir, readMeta, readContent } from "../src/storage.js";
+import { withSession, getPageByNo, getChildren } from "../src/storage.js";
+import { closePool } from "../src/db.js";
+import { resetDb, makeTestSession } from "./helpers/db.js";
 
-const TEST_ROOT = path.join(os.tmpdir(), "context-paging-test-context-manager");
-process.env.PAGES_ROOT = TEST_ROOT;
+let sid: string;
 
 beforeEach(async () => {
-  await fs.rm(TEST_ROOT, { recursive: true, force: true });
-  await ensureRoot();
+  await resetDb();
+  sid = await makeTestSession();
 });
 
-afterEach(async () => {
-  await fs.rm(TEST_ROOT, { recursive: true, force: true });
+afterAll(async () => {
+  await closePool();
 });
 
 // --- Page operations ---
 
 describe("handlePageOut", () => {
   it("creates a page and returns confirmation", async () => {
-    const result = await handlePageOut({
-      title: "Auth Debug",
-      content: "Found the bug in token validation",
-      summary: "Token validation fix",
+    await withSession(sid, async () => {
+      const result = await handlePageOut({
+        title: "Auth Debug",
+        content: "Found the bug in token validation",
+        summary: "Token validation fix",
+      });
+      expect(result).toContain("Paged out");
+      expect(result).toContain("Page 1");
+      expect(result).toContain("Auth Debug");
     });
-    expect(result).toContain("Paged out");
-    expect(result).toContain("Page 1");
-    expect(result).toContain("Auth Debug");
   });
 
-  it("stores content on disk", async () => {
-    await handlePageOut({
-      title: "Test",
-      content: "My content",
-      summary: "Summary",
+  it("stores content in the DB", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({
+        title: "Test",
+        content: "My content",
+        summary: "Summary",
+      });
+      const row = await getPageByNo(1);
+      expect(row?.content).toBe("My content");
+      expect(row?.title).toBe("Test");
+      expect(row?.summary).toBe("Summary");
     });
-    const dir = await findPageDir(1);
-    expect(dir).not.toBeNull();
-    const content = await readContent(dir!);
-    expect(content).toBe("My content");
   });
 
-  it("creates nested pages", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    const result = await handlePageOut({
-      title: "Child",
-      content: "C",
-      summary: "C",
-      parent_id: 1,
+  it("assigns sequential page numbers within a session", async () => {
+    await withSession(sid, async () => {
+      const r1 = await handlePageOut({ title: "First", content: "", summary: "" });
+      const r2 = await handlePageOut({ title: "Second", content: "", summary: "" });
+      expect(r1).toContain("Page 1");
+      expect(r2).toContain("Page 2");
     });
-    expect(result).toContain("under page 1");
   });
 
-  it("sets is_resident to false", async () => {
-    await handlePageOut({ title: "Test", content: "C", summary: "S" });
-    const dir = await findPageDir(1);
-    const meta = await readMeta(dir!);
-    expect(meta.is_resident).toBe(false);
+  it("nests pages under parent_id", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "Parent", content: "", summary: "" });
+      const result = await handlePageOut({
+        title: "Child",
+        content: "",
+        summary: "",
+        parent_id: 1,
+      });
+      expect(result).toContain("under page 1");
+      const child = await getPageByNo(2);
+      const parent = await getPageByNo(1);
+      expect(child?.parent_id).toBe(parent?.id);
+    });
+  });
+
+  it("defaults is_resident to false", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "X", content: "", summary: "" });
+      const row = await getPageByNo(1);
+      expect(row?.is_resident).toBe(false);
+    });
   });
 });
 
 describe("handlePageTable", () => {
-  it("returns empty message when no pages", async () => {
-    const result = await handlePageTable({});
-    expect(result).toContain("empty");
+  it("returns empty-string message when no pages exist", async () => {
+    await withSession(sid, async () => {
+      const result = await handlePageTable({});
+      expect(result).toContain("empty");
+    });
   });
 
-  it("lists all pages", async () => {
-    await handlePageOut({ title: "First", content: "A", summary: "S1" });
-    await handlePageOut({ title: "Second", content: "B", summary: "S2" });
-    const result = await handlePageTable({});
-    expect(result).toContain("Page 1");
-    expect(result).toContain("Page 2");
-    expect(result).toContain("First");
-    expect(result).toContain("Second");
+  it("lists existing pages", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "A", content: "", summary: "" });
+      await handlePageOut({ title: "B", content: "", summary: "" });
+      const result = await handlePageTable({});
+      expect(result).toContain('Page 1: "A"');
+      expect(result).toContain('Page 2: "B"');
+    });
   });
 
-  it("filters by parent_id", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    await handlePageOut({ title: "Child", content: "C", summary: "C", parent_id: 1 });
-    await handlePageOut({ title: "Other", content: "O", summary: "O" });
-
-    const result = await handlePageTable({ parent_id: 1 });
-    expect(result).toContain("Child");
-    expect(result).not.toContain("Other");
+  it("scopes to a parent page when parent_id is given", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "Parent", content: "", summary: "" });
+      await handlePageOut({ title: "Child", content: "", summary: "", parent_id: 1 });
+      await handlePageOut({ title: "Sibling", content: "", summary: "" });
+      const result = await handlePageTable({ parent_id: 1 });
+      expect(result).toContain("Child");
+      expect(result).not.toContain("Sibling");
+    });
   });
 
-  it("returns error for non-existent parent", async () => {
-    const result = await handlePageTable({ parent_id: 999 });
-    expect(result).toContain("not found");
+  it("reports missing parent", async () => {
+    await withSession(sid, async () => {
+      const result = await handlePageTable({ parent_id: 99 });
+      expect(result).toContain("not found");
+    });
   });
 });
 
 describe("handlePageIn", () => {
-  it("returns page content with header", async () => {
-    await handlePageOut({ title: "My Page", content: "The content", summary: "Sum" });
-    const result = await handlePageIn({ id: 1 });
-    expect(result).toContain("# Page 1: My Page");
-    expect(result).toContain("The content");
-    expect(result).toContain("Sum");
+  it("returns the full page content with header", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({
+        title: "Notes",
+        content: "Body of notes",
+        summary: "Some notes",
+      });
+      const result = await handlePageIn({ id: 1 });
+      expect(result).toContain("# Page 1: Notes");
+      expect(result).toContain("Body of notes");
+      expect(result).toContain("Some notes");
+    });
   });
 
-  it("marks page as resident", async () => {
-    await handlePageOut({ title: "Test", content: "C", summary: "S" });
-    await handlePageIn({ id: 1 });
-    const dir = await findPageDir(1);
-    const meta = await readMeta(dir!);
-    expect(meta.is_resident).toBe(true);
+  it("flips is_resident to true", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "X", content: "", summary: "" });
+      await handlePageIn({ id: 1 });
+      const row = await getPageByNo(1);
+      expect(row?.is_resident).toBe(true);
+    });
   });
 
-  it("returns error for non-existent page", async () => {
-    const result = await handlePageIn({ id: 999 });
-    expect(result).toContain("not found");
+  it("returns 'not found' for unknown page", async () => {
+    await withSession(sid, async () => {
+      const result = await handlePageIn({ id: 99 });
+      expect(result).toContain("not found");
+    });
   });
 });
 
 describe("handlePageUpdate", () => {
-  it("updates title", async () => {
-    await handlePageOut({ title: "Old", content: "C", summary: "S" });
-    const result = await handlePageUpdate({ id: 1, title: "New" });
-    expect(result).toContain("title");
-
-    const dir = await findPageDir(1);
-    const meta = await readMeta(dir!);
-    expect(meta.title).toBe("New");
+  it("updates title and summary", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "Old", content: "", summary: "old" });
+      await handlePageUpdate({ id: 1, title: "New", summary: "new" });
+      const row = await getPageByNo(1);
+      expect(row?.title).toBe("New");
+      expect(row?.summary).toBe("new");
+    });
   });
 
-  it("updates summary", async () => {
-    await handlePageOut({ title: "T", content: "C", summary: "Old" });
-    await handlePageUpdate({ id: 1, summary: "New summary" });
-
-    const dir = await findPageDir(1);
-    const meta = await readMeta(dir!);
-    expect(meta.summary).toBe("New summary");
+  it("toggles is_resident", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "X", content: "", summary: "" });
+      await handlePageUpdate({ id: 1, is_resident: true });
+      expect((await getPageByNo(1))?.is_resident).toBe(true);
+      await handlePageUpdate({ id: 1, is_resident: false });
+      expect((await getPageByNo(1))?.is_resident).toBe(false);
+    });
   });
 
-  it("updates content", async () => {
-    await handlePageOut({ title: "T", content: "Old content", summary: "S" });
-    await handlePageUpdate({ id: 1, content: "New content" });
-
-    const dir = await findPageDir(1);
-    const content = await readContent(dir!);
-    expect(content).toBe("New content");
-  });
-
-  it("updates resident status", async () => {
-    await handlePageOut({ title: "T", content: "C", summary: "S" });
-    const result = await handlePageUpdate({ id: 1, is_resident: true });
-    expect(result).toContain("paged in");
-
-    const dir = await findPageDir(1);
-    const meta = await readMeta(dir!);
-    expect(meta.is_resident).toBe(true);
-  });
-
-  it("updates multiple fields at once", async () => {
-    await handlePageOut({ title: "T", content: "C", summary: "S" });
-    const result = await handlePageUpdate({ id: 1, title: "New", summary: "New S" });
-    expect(result).toContain("title");
-    expect(result).toContain("summary");
-  });
-
-  it("returns error for non-existent page", async () => {
-    const result = await handlePageUpdate({ id: 999, title: "X" });
-    expect(result).toContain("not found");
+  it("reports missing page", async () => {
+    await withSession(sid, async () => {
+      const result = await handlePageUpdate({ id: 99, title: "Nope" });
+      expect(result).toContain("not found");
+    });
   });
 });
 
 describe("handlePageFree", () => {
-  it("deletes a page", async () => {
-    await handlePageOut({ title: "Doomed", content: "C", summary: "S" });
-    const result = await handlePageFree({ id: 1 });
-    expect(result).toContain("Freed");
-    expect(result).toContain("Doomed");
-
-    const dir = await findPageDir(1);
-    expect(dir).toBeNull();
+  it("deletes a leaf page", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "X", content: "", summary: "" });
+      const result = await handlePageFree({ id: 1 });
+      expect(result).toContain("Freed");
+      expect(await getPageByNo(1)).toBeNull();
+    });
   });
 
-  it("recursively deletes children by default", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    await handlePageOut({ title: "Child", content: "C", summary: "C", parent_id: 1 });
-
-    const result = await handlePageFree({ id: 1 });
-    expect(result).toContain("1 children");
-    expect(await findPageDir(1)).toBeNull();
-    expect(await findPageDir(2)).toBeNull();
+  it("with recursive=true cascades children", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "P", content: "", summary: "" });
+      await handlePageOut({ title: "C", content: "", summary: "", parent_id: 1 });
+      await handlePageFree({ id: 1, recursive: true });
+      expect(await getPageByNo(1)).toBeNull();
+      expect(await getPageByNo(2)).toBeNull();
+    });
   });
 
-  it("errors on non-recursive delete with children", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    await handlePageOut({ title: "Child", content: "C", summary: "C", parent_id: 1 });
-
-    const result = await handlePageFree({ id: 1, recursive: false });
-    expect(result).toContain("has children");
-    expect(result).toContain("Child");
-
-    // Page should still exist
-    expect(await findPageDir(1)).not.toBeNull();
-  });
-
-  it("returns error for non-existent page", async () => {
-    const result = await handlePageFree({ id: 999 });
-    expect(result).toContain("not found");
+  it("with recursive=false refuses when children exist", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "P", content: "", summary: "" });
+      await handlePageOut({ title: "C", content: "", summary: "", parent_id: 1 });
+      const result = await handlePageFree({ id: 1, recursive: false });
+      expect(result).toContain("children");
+      expect(await getPageByNo(1)).not.toBeNull();
+    });
   });
 });
 
 describe("handlePageMove", () => {
-  it("moves a page under another", async () => {
-    await handlePageOut({ title: "Target", content: "T", summary: "T" });
-    await handlePageOut({ title: "Movable", content: "M", summary: "M" });
-
-    const result = await handlePageMove({ id: 2, new_parent_id: 1 });
-    expect(result).toContain("Moved page 2");
-    expect(result).toContain("under page 1");
-
-    // Should now be nested
-    const table = await handlePageTable({});
-    expect(table).toContain("Target");
-    expect(table).toContain("Movable");
+  it("moves a page under a new parent", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "A", content: "", summary: "" });
+      await handlePageOut({ title: "B", content: "", summary: "" });
+      await handlePageMove({ id: 2, new_parent_id: 1 });
+      const child = await getPageByNo(2);
+      const parent = await getPageByNo(1);
+      expect(child?.parent_id).toBe(parent?.id);
+    });
   });
 
-  it("moves a page to root", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    await handlePageOut({ title: "Child", content: "C", summary: "C", parent_id: 1 });
-
-    const result = await handlePageMove({ id: 2 });
-    expect(result).toContain("to root");
+  it("moves a page to root with no new_parent_id", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "P", content: "", summary: "" });
+      await handlePageOut({ title: "C", content: "", summary: "", parent_id: 1 });
+      await handlePageMove({ id: 2 });
+      expect((await getPageByNo(2))?.parent_id).toBeNull();
+    });
   });
 
-  it("prevents moving under itself", async () => {
-    await handlePageOut({ title: "Page", content: "P", summary: "P" });
-    const result = await handlePageMove({ id: 1, new_parent_id: 1 });
-    expect(result).toContain("Cannot move");
+  it("rejects circular nesting", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "A", content: "", summary: "" });
+      await handlePageOut({ title: "B", content: "", summary: "", parent_id: 1 });
+      const result = await handlePageMove({ id: 1, new_parent_id: 2 });
+      expect(result).toContain("circular");
+    });
   });
 
-  it("prevents circular nesting", async () => {
-    await handlePageOut({ title: "Parent", content: "P", summary: "P" });
-    await handlePageOut({ title: "Child", content: "C", summary: "C", parent_id: 1 });
-
-    const result = await handlePageMove({ id: 1, new_parent_id: 2 });
-    expect(result).toContain("circular");
-  });
-
-  it("returns error for non-existent page", async () => {
-    const result = await handlePageMove({ id: 999, new_parent_id: 1 });
-    expect(result).toContain("not found");
+  it("rejects moving a page under itself", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "X", content: "", summary: "" });
+      const result = await handlePageMove({ id: 1, new_parent_id: 1 });
+      expect(result).toContain("itself");
+    });
   });
 });
 
 describe("handlePageMerge", () => {
-  it("concatenates sources into target", async () => {
-    await handlePageOut({ title: "Target", content: "Base content", summary: "T" });
-    await handlePageOut({ title: "Source", content: "Extra content", summary: "S" });
+  it("concatenates source pages into the target", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "target body", summary: "" });
+      await handlePageOut({ title: "S1", content: "s1 body", summary: "" });
+      await handlePageOut({ title: "S2", content: "s2 body", summary: "" });
+      const result = await handlePageMerge({ source_ids: [2, 3], target_id: 1 });
+      expect(result).toContain("Merged pages");
 
-    const result = await handlePageMerge({
-      source_ids: [2],
-      target_id: 1,
-      strategy: "concatenate",
+      const target = await getPageByNo(1);
+      expect(target?.content).toContain("target body");
+      expect(target?.content).toContain("s1 body");
+      expect(target?.content).toContain("s2 body");
+
+      // Sources freed (we deleted by their DB id, so getPageByNo for their
+      // old page_no's should also return null).
+      expect(await getPageByNo(2)).toBeNull();
+      expect(await getPageByNo(3)).toBeNull();
     });
-    expect(result).toContain("Merged pages [2] into page 1");
-
-    const dir = await findPageDir(1);
-    const content = await readContent(dir!);
-    expect(content).toContain("Base content");
-    expect(content).toContain("Extra content");
-
-    // Source should be deleted
-    expect(await findPageDir(2)).toBeNull();
   });
 
-  it("uses provided content when strategy is 'provided'", async () => {
-    await handlePageOut({ title: "Target", content: "Old", summary: "T" });
-    await handlePageOut({ title: "Source", content: "Also old", summary: "S" });
-
-    await handlePageMerge({
-      source_ids: [2],
-      target_id: 1,
-      strategy: "provided",
-      merged_content: "Brand new merged content",
-      merged_summary: "Merged",
+  it("uses provided strategy when given", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "old", summary: "" });
+      await handlePageOut({ title: "S", content: "src", summary: "" });
+      await handlePageMerge({
+        source_ids: [2],
+        target_id: 1,
+        strategy: "provided",
+        merged_content: "explicit body",
+        merged_summary: "merged summary",
+      });
+      const target = await getPageByNo(1);
+      expect(target?.content).toBe("explicit body");
+      expect(target?.summary).toBe("merged summary");
     });
-
-    const dir = await findPageDir(1);
-    const content = await readContent(dir!);
-    expect(content).toBe("Brand new merged content");
-
-    const meta = await readMeta(dir!);
-    expect(meta.summary).toBe("Merged");
   });
 
-  it("errors when provided strategy has no content", async () => {
-    await handlePageOut({ title: "Target", content: "T", summary: "T" });
-    await handlePageOut({ title: "Source", content: "S", summary: "S" });
-
-    const result = await handlePageMerge({
-      source_ids: [2],
-      target_id: 1,
-      strategy: "provided",
+  it("errors when no sources are given", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "", summary: "" });
+      const result = await handlePageMerge({ source_ids: [1], target_id: 1 });
+      expect(result).toContain("No source");
     });
-    expect(result).toContain("requires merged_content");
   });
 
-  it("merges multiple sources", async () => {
-    await handlePageOut({ title: "Target", content: "Base", summary: "T" });
-    await handlePageOut({ title: "Source A", content: "AA", summary: "A" });
-    await handlePageOut({ title: "Source B", content: "BB", summary: "B" });
-
-    const result = await handlePageMerge({
-      source_ids: [2, 3],
-      target_id: 1,
+  it("errors when target is missing", async () => {
+    await withSession(sid, async () => {
+      const result = await handlePageMerge({ source_ids: [1], target_id: 99 });
+      expect(result).toContain("Target page");
     });
-    expect(result).toContain("Merged pages [2, 3]");
-
-    const dir = await findPageDir(1);
-    const content = await readContent(dir!);
-    expect(content).toContain("AA");
-    expect(content).toContain("BB");
   });
 
-  it("skips source that matches target", async () => {
-    await handlePageOut({ title: "Only", content: "C", summary: "S" });
-    const result = await handlePageMerge({
-      source_ids: [1],
-      target_id: 1,
+  it("errors when 'provided' strategy is missing merged_content", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "", summary: "" });
+      await handlePageOut({ title: "S", content: "", summary: "" });
+      const result = await handlePageMerge({
+        source_ids: [2],
+        target_id: 1,
+        strategy: "provided",
+      });
+      expect(result).toContain("merged_content");
     });
-    expect(result).toContain("No source pages to merge");
-  });
-
-  it("returns error for non-existent target", async () => {
-    const result = await handlePageMerge({ source_ids: [1], target_id: 999 });
-    expect(result).toContain("not found");
   });
 });
 
-// --- Swap operations ---
-
 describe("swapOut", () => {
-  it("returns original messages when swapCount is 0", () => {
+  it("removes the last N messages and replaces them with one reference", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
+      { role: "user", content: "more" },
+      { role: "assistant", content: "ok" },
     ];
-    const result = swapOut(messages, 1, "Test", "Summary", 0);
-    expect(result).toEqual(messages);
-  });
-
-  it("returns original messages when swapCount is undefined", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "hello" }];
-    const result = swapOut(messages, 1, "Test", "Summary");
-    expect(result).toEqual(messages);
-  });
-
-  it("removes messages and adds reference", () => {
-    const messages: ModelMessage[] = [
-      { role: "user", content: "first" },
-      { role: "assistant", content: "response" },
-      { role: "user", content: "second" },
-      { role: "assistant", content: "another response" },
-    ];
-
-    const result = swapOut(messages, 5, "Debug Session", "Found the bug", 2);
-    expect(result).toHaveLength(3); // 2 kept + 1 reference
-    expect(result[0]).toEqual({ role: "user", content: "first" });
-    expect(result[1]).toEqual({ role: "assistant", content: "response" });
+    const result = swapOut(messages, 7, "Auth notes", "some notes", 2);
+    expect(result).toHaveLength(3);
     expect(result[2].role).toBe("assistant");
-    expect(result[2].content).toContain("Paged out");
-    expect(result[2].content).toContain("Page 5");
-    expect(result[2].content).toContain("Debug Session");
-    expect(result[2].content).toContain("Found the bug");
+    expect(result[2].content).toContain('[Paged out → Page 7: "Auth notes" — some notes]');
   });
 
-  it("handles swapCount larger than message count", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "only one" }];
-    const result = swapOut(messages, 1, "Test", "S", 10);
-    expect(result).toHaveLength(1); // just the reference
+  it("returns unchanged messages when swapCount is 0 or undefined", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "x" }];
+    expect(swapOut(messages, 1, "X", "", 0)).toEqual(messages);
+    expect(swapOut(messages, 1, "X", "")).toEqual(messages);
+  });
+
+  it("clamps to the array length when swapCount > messages.length", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "x" }];
+    const result = swapOut(messages, 1, "X", "", 99);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("assistant");
     expect(result[0].content).toContain("Paged out");
   });
 });
 
 describe("swapIn", () => {
-  it("appends page content as an assistant message", () => {
-    const messages: ModelMessage[] = [
-      { role: "user", content: "tell me about auth" },
-    ];
-
-    const result = swapIn(messages, 3, "Auth Debug", "Token was expired");
+  it("appends a paged-in reference with the content", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "hi" }];
+    const result = swapIn(messages, 5, "Title", "Body");
     expect(result).toHaveLength(2);
-    expect(result[1].role).toBe("assistant");
-    expect(result[1].content).toContain("Paged in");
-    expect(result[1].content).toContain("Page 3");
-    expect(result[1].content).toContain("Auth Debug");
-    expect(result[1].content).toContain("Token was expired");
-    expect(result[1].content).toContain("End of Page 3");
+    expect(result[1].content).toContain("[Paged in ← Page 5");
+    expect(result[1].content).toContain("Body");
+    expect(result[1].content).toContain("[End of Page 5]");
+  });
+});
+
+describe("integration: storage scoped by session_id", () => {
+  it("pages created in one session are invisible to another", async () => {
+    const sid2 = await makeTestSession("session-two");
+    await withSession(sid, () => handlePageOut({ title: "A", content: "", summary: "" }));
+    const result = await withSession(sid2, () => handlePageTable({}));
+    expect(result).toContain("empty");
   });
 
-  it("preserves original messages", () => {
-    const messages: ModelMessage[] = [
-      { role: "user", content: "a" },
-      { role: "assistant", content: "b" },
-    ];
-
-    const result = swapIn(messages, 1, "T", "C");
-    expect(result[0]).toEqual(messages[0]);
-    expect(result[1]).toEqual(messages[1]);
+  it("page_in within session 1 returns nothing for the same page_no in session 2", async () => {
+    const sid2 = await makeTestSession("session-two");
+    await withSession(sid, () => handlePageOut({ title: "A", content: "x", summary: "" }));
+    await withSession(sid2, () => handlePageOut({ title: "B", content: "y", summary: "" }));
+    const fromA = await withSession(sid, () => handlePageIn({ id: 1 }));
+    const fromB = await withSession(sid2, () => handlePageIn({ id: 1 }));
+    expect(fromA).toContain("x");
+    expect(fromB).toContain("y");
   });
 });

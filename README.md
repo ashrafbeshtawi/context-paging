@@ -59,6 +59,7 @@ The result: the agent can work on arbitrarily long tasks without losing context,
 
 ### Prerequisites
 - **Node.js** >= 18
+- **Docker** (for the PostgreSQL database)
 - An API key for one of the supported providers
 
 ### 1. Clone and install
@@ -76,6 +77,17 @@ Copy the example env file and fill in your provider + API key:
 ```bash
 cp .env.example .env
 ```
+
+### 2.5. Start the database
+
+Sessions, messages, and pages are persisted in PostgreSQL. Bring it up with Docker Compose, which also runs Flyway migrations:
+
+```bash
+docker compose up -d postgres
+docker compose run --rm flyway
+```
+
+The DB listens on port 5433 by default to avoid clashing with any local Postgres. Override via `PG_*` env vars in `.env`.
 
 Edit `.env`:
 ```bash

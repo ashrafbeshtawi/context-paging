@@ -1,281 +1,200 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
+import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
 import {
-  ensureRoot,
-  getNextId,
-  findPageDir,
-  readMeta,
-  readContent,
-  writeMeta,
-  writeContent,
-  createPageDir,
-  deletePageDir,
-  getChildPageDirs,
+  withSession,
+  insertPage,
+  getPageByNo,
+  getPageById,
+  getChildren,
   buildTree,
-  movePageDir,
+  updatePage,
+  deletePage,
+  setParent,
   isDescendantOf,
+  currentSessionId,
 } from "../src/storage.js";
-import type { PageMeta } from "../src/types.js";
+import { closePool } from "../src/db.js";
+import { resetDb, makeTestSession } from "./helpers/db.js";
 
-const TEST_ROOT = path.join(os.tmpdir(), "context-paging-test-storage");
-process.env.PAGES_ROOT = TEST_ROOT;
+describe("storage (DB-backed)", () => {
+  let sid: string;
 
-function makeMeta(overrides: Partial<PageMeta> = {}): PageMeta {
-  return {
-    id: 1,
-    title: "Test Page",
-    summary: "A test",
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: "2026-01-01T00:00:00.000Z",
-    is_resident: false,
-    ...overrides,
-  };
-}
-
-beforeEach(async () => {
-  await fs.rm(TEST_ROOT, { recursive: true, force: true });
-  await ensureRoot();
-});
-
-afterEach(async () => {
-  await fs.rm(TEST_ROOT, { recursive: true, force: true });
-});
-
-describe("ensureRoot", () => {
-  it("creates the root directory", async () => {
-    const stat = await fs.stat(TEST_ROOT);
-    expect(stat.isDirectory()).toBe(true);
-  });
-});
-
-describe("getNextId", () => {
-  it("returns 1 on first call", async () => {
-    const id = await getNextId();
-    expect(id).toBe(1);
+  beforeAll(async () => {
+    await resetDb();
   });
 
-  it("increments on successive calls", async () => {
-    const id1 = await getNextId();
-    const id2 = await getNextId();
-    const id3 = await getNextId();
-    expect(id1).toBe(1);
-    expect(id2).toBe(2);
-    expect(id3).toBe(3);
+  afterAll(async () => {
+    await closePool();
   });
 
-  it("persists counter across reads", async () => {
-    await getNextId();
-    await getNextId();
-    const raw = await fs.readFile(path.join(TEST_ROOT, "_counter.json"), "utf-8");
-    const data = JSON.parse(raw);
-    expect(data.next_id).toBe(3);
-  });
-});
-
-describe("createPageDir", () => {
-  it("creates a directory at root", async () => {
-    const dir = await createPageDir(1);
-    expect(dir).toBe(path.join(TEST_ROOT, "1"));
-    const stat = await fs.stat(dir);
-    expect(stat.isDirectory()).toBe(true);
+  beforeEach(async () => {
+    await resetDb();
+    sid = await makeTestSession();
   });
 
-  it("creates a nested directory under a parent", async () => {
-    const parentDir = await createPageDir(1);
-    await writeMeta(parentDir, makeMeta({ id: 1 }));
-
-    const childDir = await createPageDir(2, 1);
-    expect(childDir).toBe(path.join(TEST_ROOT, "1", "2"));
+  it("currentSessionId throws when called outside withSession", () => {
+    expect(() => currentSessionId()).toThrow(/withSession/);
   });
 
-  it("throws when parent does not exist", async () => {
-    await expect(createPageDir(2, 999)).rejects.toThrow("Parent page 999 not found");
-  });
-});
-
-describe("readMeta / writeMeta", () => {
-  it("round-trips metadata", async () => {
-    const dir = await createPageDir(1);
-    const meta = makeMeta({ id: 1, title: "Round Trip" });
-    await writeMeta(dir, meta);
-
-    const read = await readMeta(dir);
-    expect(read).toEqual(meta);
-  });
-});
-
-describe("readContent / writeContent", () => {
-  it("round-trips content", async () => {
-    const dir = await createPageDir(1);
-    await writeContent(dir, "Hello, world!");
-    const content = await readContent(dir);
-    expect(content).toBe("Hello, world!");
+  it("insertPage assigns page_no 1, 2, 3... per session", async () => {
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "", content: "" });
+      const b = await insertPage({ title: "B", summary: "", content: "" });
+      const c = await insertPage({ title: "C", summary: "", content: "" });
+      expect(a.page_no).toBe(1);
+      expect(b.page_no).toBe(2);
+      expect(c.page_no).toBe(3);
+    });
   });
 
-  it("returns empty string for missing content", async () => {
-    const dir = await createPageDir(1);
-    const content = await readContent(dir);
-    expect(content).toBe("");
-  });
-});
-
-describe("findPageDir", () => {
-  it("finds a page at root", async () => {
-    const dir = await createPageDir(1);
-    await writeMeta(dir, makeMeta({ id: 1 }));
-
-    const found = await findPageDir(1);
-    expect(found).toBe(dir);
+  it("page_no sequences are per-session (two sessions both start at 1)", async () => {
+    const sid2 = await makeTestSession("session-two");
+    const a = await withSession(sid, () =>
+      insertPage({ title: "A", summary: "", content: "" })
+    );
+    const b = await withSession(sid2, () =>
+      insertPage({ title: "B", summary: "", content: "" })
+    );
+    expect(a.page_no).toBe(1);
+    expect(b.page_no).toBe(1);
+    expect(a.session_id).not.toBe(b.session_id);
   });
 
-  it("finds a nested page", async () => {
-    const parentDir = await createPageDir(1);
-    await writeMeta(parentDir, makeMeta({ id: 1 }));
-
-    const childDir = await createPageDir(2, 1);
-    await writeMeta(childDir, makeMeta({ id: 2 }));
-
-    const found = await findPageDir(2);
-    expect(found).toBe(childDir);
+  it("getPageByNo only finds pages in the active session", async () => {
+    const sid2 = await makeTestSession("session-two");
+    await withSession(sid, () => insertPage({ title: "A", summary: "", content: "" }));
+    const fromOther = await withSession(sid2, () => getPageByNo(1));
+    expect(fromOther).toBeNull();
   });
 
-  it("returns null for non-existent page", async () => {
-    const found = await findPageDir(999);
-    expect(found).toBeNull();
-  });
-});
-
-describe("deletePageDir", () => {
-  it("removes a page directory", async () => {
-    const dir = await createPageDir(1);
-    await writeMeta(dir, makeMeta({ id: 1 }));
-    await deletePageDir(dir);
-
-    const found = await findPageDir(1);
-    expect(found).toBeNull();
-  });
-});
-
-describe("getChildPageDirs", () => {
-  it("returns empty array for no children", async () => {
-    const children = await getChildPageDirs(TEST_ROOT);
-    expect(children).toEqual([]);
+  it("insertPage with parentPageNo nests pages", async () => {
+    await withSession(sid, async () => {
+      const parent = await insertPage({ title: "Parent", summary: "", content: "" });
+      const child = await insertPage({
+        title: "Child",
+        summary: "",
+        content: "",
+        parentPageNo: parent.page_no,
+      });
+      expect(child.parent_id).toBe(parent.id);
+    });
   });
 
-  it("returns child page directories", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
-
-    const dir2 = await createPageDir(2);
-    await writeMeta(dir2, makeMeta({ id: 2 }));
-
-    const children = await getChildPageDirs(TEST_ROOT);
-    expect(children).toHaveLength(2);
-    expect(children).toContain(dir1);
-    expect(children).toContain(dir2);
+  it("insertPage throws when parentPageNo does not exist", async () => {
+    await withSession(sid, async () => {
+      await expect(
+        insertPage({ title: "Orphan", summary: "", content: "", parentPageNo: 99 })
+      ).rejects.toThrow(/not found/);
+    });
   });
 
-  it("ignores directories without meta.json", async () => {
-    await fs.mkdir(path.join(TEST_ROOT, "not-a-page"), { recursive: true });
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
+  it("buildTree returns a hierarchical structure ordered by page_no", async () => {
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "", content: "" });
+      const b = await insertPage({ title: "B", summary: "", content: "" });
+      await insertPage({ title: "A1", summary: "", content: "", parentPageNo: a.page_no });
+      await insertPage({ title: "A2", summary: "", content: "", parentPageNo: a.page_no });
+      void b;
 
-    const children = await getChildPageDirs(TEST_ROOT);
-    expect(children).toHaveLength(1);
-  });
-});
-
-describe("buildTree", () => {
-  it("builds a flat tree", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1, title: "First" }));
-
-    const dir2 = await createPageDir(2);
-    await writeMeta(dir2, makeMeta({ id: 2, title: "Second" }));
-
-    const tree = await buildTree();
-    expect(tree).toHaveLength(2);
-    expect(tree[0].meta.id).toBe(1);
-    expect(tree[1].meta.id).toBe(2);
-    expect(tree[0].children).toHaveLength(0);
+      const tree = await buildTree();
+      expect(tree.map((n) => n.row.title)).toEqual(["A", "B"]);
+      expect(tree[0].children.map((c) => c.row.title)).toEqual(["A1", "A2"]);
+      expect(tree[1].children).toEqual([]);
+    });
   });
 
-  it("builds a nested tree", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1, title: "Parent" }));
-
-    const dir2 = await createPageDir(2, 1);
-    await writeMeta(dir2, makeMeta({ id: 2, title: "Child" }));
-
-    const tree = await buildTree();
-    expect(tree).toHaveLength(1);
-    expect(tree[0].meta.title).toBe("Parent");
-    expect(tree[0].children).toHaveLength(1);
-    expect(tree[0].children[0].meta.title).toBe("Child");
+  it("updatePage mutates fields and bumps updated_at", async () => {
+    await withSession(sid, async () => {
+      const p = await insertPage({ title: "Orig", summary: "s", content: "c" });
+      const before = p.updated_at;
+      await new Promise((r) => setTimeout(r, 5));
+      const after = await updatePage(p.id, { title: "New", isResident: true });
+      expect(after?.title).toBe("New");
+      expect(after?.is_resident).toBe(true);
+      expect(after!.updated_at.getTime()).toBeGreaterThan(before.getTime());
+    });
   });
 
-  it("sorts by ID", async () => {
-    const dir3 = await createPageDir(3);
-    await writeMeta(dir3, makeMeta({ id: 3 }));
-
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
-
-    const tree = await buildTree();
-    expect(tree[0].meta.id).toBe(1);
-    expect(tree[1].meta.id).toBe(3);
-  });
-});
-
-describe("movePageDir", () => {
-  it("moves a page under a new parent", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
-
-    const dir2 = await createPageDir(2);
-    await writeMeta(dir2, makeMeta({ id: 2 }));
-
-    const newDir = await movePageDir(dir2, dir1);
-    expect(newDir).toBe(path.join(dir1, "2"));
-
-    const stat = await fs.stat(newDir);
-    expect(stat.isDirectory()).toBe(true);
-  });
-});
-
-describe("isDescendantOf", () => {
-  it("returns true for a direct child", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
-
-    const dir2 = await createPageDir(2, 1);
-    await writeMeta(dir2, makeMeta({ id: 2 }));
-
-    expect(await isDescendantOf(2, dir1)).toBe(true);
+  it("updatePage with no fields returns the current row", async () => {
+    await withSession(sid, async () => {
+      const p = await insertPage({ title: "X", summary: "", content: "" });
+      const got = await updatePage(p.id, {});
+      expect(got?.id).toBe(p.id);
+    });
   });
 
-  it("returns true for a deep descendant", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
-
-    const dir2 = await createPageDir(2, 1);
-    await writeMeta(dir2, makeMeta({ id: 2 }));
-
-    const dir3 = await createPageDir(3, 2);
-    await writeMeta(dir3, makeMeta({ id: 3 }));
-
-    expect(await isDescendantOf(3, dir1)).toBe(true);
+  it("deletePage cascades to children", async () => {
+    await withSession(sid, async () => {
+      const parent = await insertPage({ title: "Parent", summary: "", content: "" });
+      const child = await insertPage({
+        title: "Child",
+        summary: "",
+        content: "",
+        parentPageNo: parent.page_no,
+      });
+      const ok = await deletePage(parent.id);
+      expect(ok).toBe(true);
+      expect(await getPageById(child.id)).toBeNull();
+    });
   });
 
-  it("returns false for unrelated pages", async () => {
-    const dir1 = await createPageDir(1);
-    await writeMeta(dir1, makeMeta({ id: 1 }));
+  it("setParent moves a page; new_parent_id null moves to root", async () => {
+    await withSession(sid, async () => {
+      const p = await insertPage({ title: "P", summary: "", content: "" });
+      const c = await insertPage({
+        title: "C",
+        summary: "",
+        content: "",
+        parentPageNo: p.page_no,
+      });
+      const detached = await setParent(c.id, null);
+      expect(detached?.parent_id).toBeNull();
+    });
+  });
 
-    const dir2 = await createPageDir(2);
-    await writeMeta(dir2, makeMeta({ id: 2 }));
+  it("isDescendantOf detects ancestry through nested chain", async () => {
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "", content: "" });
+      const b = await insertPage({
+        title: "B",
+        summary: "",
+        content: "",
+        parentPageNo: a.page_no,
+      });
+      const c = await insertPage({
+        title: "C",
+        summary: "",
+        content: "",
+        parentPageNo: b.page_no,
+      });
 
-    expect(await isDescendantOf(2, dir1)).toBe(false);
+      expect(await isDescendantOf(a.id, c.id)).toBe(true);
+      expect(await isDescendantOf(b.id, c.id)).toBe(true);
+      expect(await isDescendantOf(c.id, a.id)).toBe(false);
+    });
+  });
+
+  it("getChildren(null) returns root pages only", async () => {
+    await withSession(sid, async () => {
+      const r1 = await insertPage({ title: "R1", summary: "", content: "" });
+      const r2 = await insertPage({ title: "R2", summary: "", content: "" });
+      await insertPage({ title: "C1", summary: "", content: "", parentPageNo: r1.page_no });
+
+      const roots = await getChildren(null);
+      expect(roots.map((p) => p.title).sort()).toEqual(["R1", "R2"]);
+      void r2;
+    });
+  });
+
+  it("AsyncLocalStorage isolates concurrent withSession calls", async () => {
+    const sid2 = await makeTestSession("session-concurrent");
+
+    const [a, b] = await Promise.all([
+      withSession(sid, () => insertPage({ title: "from A", summary: "", content: "" })),
+      withSession(sid2, () => insertPage({ title: "from B", summary: "", content: "" })),
+    ]);
+    expect(a.session_id).toBe(sid);
+    expect(b.session_id).toBe(sid2);
+    expect(a.page_no).toBe(1);
+    expect(b.page_no).toBe(1);
   });
 });

@@ -1,12 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetForTests, createSession } from "@/lib/sessions";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { createSession } from "@/lib/sessions";
+import { closePool } from "@agent/db";
+import { resetDb } from "../../tests/helpers/db";
 
-// next/server's NextResponse uses Web Response under the hood; jsdom + node provides those.
+beforeEach(async () => {
+  await resetDb();
+});
+
+afterAll(async () => {
+  await closePool();
+});
 
 describe("/api/sessions routes", () => {
-  beforeEach(() => resetForTests());
-
-  it("GET /api/sessions returns an empty list", async () => {
+  it("GET /api/sessions returns an empty list initially", async () => {
     const { GET } = await import("@/app/api/sessions/route");
     const res = await GET();
     expect(res.status).toBe(200);
@@ -38,23 +44,6 @@ describe("/api/sessions routes", () => {
 });
 
 describe("/api/sessions/[id] routes", () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    resetForTests();
-    const os = await import("node:os");
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ctx-paging-web-"));
-    process.env.WEB_PAGES_ROOT = tmpDir;
-  });
-
-  afterEach(async () => {
-    const fs = await import("node:fs/promises");
-    await fs.rm(tmpDir, { recursive: true, force: true });
-    delete process.env.WEB_PAGES_ROOT;
-  });
-
   it("GET returns 404 for an unknown session", async () => {
     const { GET } = await import("@/app/api/sessions/[id]/route");
     const res = await GET(new Request("http://localhost/x"), {
@@ -64,7 +53,7 @@ describe("/api/sessions/[id] routes", () => {
   });
 
   it("GET returns session + context + empty page table", async () => {
-    const s = createSession("My chat");
+    const s = await createSession({ title: "My chat" });
     const { GET } = await import("@/app/api/sessions/[id]/route");
     const res = await GET(new Request("http://localhost/x"), {
       params: Promise.resolve({ id: s.id }),
@@ -87,7 +76,7 @@ describe("/api/sessions/[id] routes", () => {
     });
     expect(a.status).toBe(404);
 
-    const s = createSession();
+    const s = await createSession();
     const b = await DELETE(new Request("http://localhost/x", { method: "DELETE" }), {
       params: Promise.resolve({ id: s.id }),
     });

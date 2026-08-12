@@ -1,24 +1,19 @@
 import type { ModelMessage } from "ai";
 import {
-  ensureRoot,
-  getNextId,
-  createPageDir,
-  writeMeta,
-  writeContent,
-  readMeta,
-  readContent,
-  findPageDir,
-  deletePageDir,
-  getChildPageDirs,
+  insertPage,
+  getPageByNo,
   buildTree,
-  movePageDir,
+  updatePage,
+  deletePage,
+  setParent,
   isDescendantOf,
-  getRoot,
+  getChildren,
 } from "./storage.js";
 import { formatPageTable } from "./toc.js";
-import type { PageMeta } from "./types.js";
 
-// --- Page operations (called by tool handlers) ---
+// In the agent's mental model and tool calls, "page id" means the per-session
+// page_no (1, 2, 3, …). The DB surrogate id is internal — we never expose it
+// to the model. All handler args.id values below are page_no.
 
 export async function handlePageOut(args: {
   title: string;
@@ -26,58 +21,37 @@ export async function handlePageOut(args: {
   summary?: string;
   parent_id?: number;
 }): Promise<string> {
-  await ensureRoot();
-  const id = await getNextId();
-  const pageDir = await createPageDir(id, args.parent_id);
-
-  const now = new Date().toISOString();
-  const meta: PageMeta = {
-    id,
+  const row = await insertPage({
     title: args.title,
     summary: args.summary || "",
-    created_at: now,
-    updated_at: now,
-    is_resident: false,
-  };
-
-  await writeMeta(pageDir, meta);
-  await writeContent(pageDir, args.content || "");
-
-  return `Paged out → Page ${id}: "${args.title}"${args.parent_id ? ` (under page ${args.parent_id})` : ""}`;
+    content: args.content || "",
+    parentPageNo: args.parent_id,
+    isResident: false,
+  });
+  return `Paged out → Page ${row.page_no}: "${args.title}"${args.parent_id ? ` (under page ${args.parent_id})` : ""}`;
 }
 
-export async function handlePageTable(args: {
-  parent_id?: number;
-}): Promise<string> {
-  await ensureRoot();
-
-  let startDir: string | undefined;
+export async function handlePageTable(args: { parent_id?: number }): Promise<string> {
+  let rootParentId: number | null = null;
   if (args.parent_id !== undefined) {
-    const dir = await findPageDir(args.parent_id);
-    if (!dir) return `Page ${args.parent_id} not found.`;
-    startDir = dir;
+    const parent = await getPageByNo(args.parent_id);
+    if (!parent) return `Page ${args.parent_id} not found.`;
+    rootParentId = parent.id;
   }
-
-  const tree = await buildTree(startDir);
+  const tree = await buildTree(rootParentId);
   if (tree.length === 0) return "Page table empty — no pages stored.";
   return formatPageTable(tree);
 }
 
 export async function handlePageIn(args: { id: number }): Promise<string> {
-  await ensureRoot();
-  const dir = await findPageDir(args.id);
-  if (!dir) return `Page ${args.id} not found.`;
+  const row = await getPageByNo(args.id);
+  if (!row) return `Page ${args.id} not found.`;
 
-  const meta = await readMeta(dir);
-  const content = await readContent(dir);
-
-  if (!meta.is_resident) {
-    meta.is_resident = true;
-    meta.updated_at = new Date().toISOString();
-    await writeMeta(dir, meta);
+  if (!row.is_resident) {
+    await updatePage(row.id, { isResident: true });
   }
 
-  return `# Page ${meta.id}: ${meta.title}\n*Summary: ${meta.summary || "(none)"}*\n\n---\n\n${content}`;
+  return `# Page ${row.page_no}: ${row.title}\n*Summary: ${row.summary || "(none)"}*\n\n---\n\n${row.content}`;
 }
 
 export async function handlePageUpdate(args: {
@@ -87,68 +61,64 @@ export async function handlePageUpdate(args: {
   content?: string;
   is_resident?: boolean;
 }): Promise<string> {
-  await ensureRoot();
-  const dir = await findPageDir(args.id);
-  if (!dir) return `Page ${args.id} not found.`;
+  const row = await getPageByNo(args.id);
+  if (!row) return `Page ${args.id} not found.`;
 
-  const meta = await readMeta(dir);
   const changes: string[] = [];
+  if (args.title !== undefined) changes.push("title");
+  if (args.summary !== undefined) changes.push("summary");
+  if (args.content !== undefined) changes.push("content");
+  if (args.is_resident !== undefined) changes.push(args.is_resident ? "paged in" : "paged out");
 
-  if (args.title !== undefined) { meta.title = args.title; changes.push("title"); }
-  if (args.summary !== undefined) { meta.summary = args.summary; changes.push("summary"); }
-  if (args.is_resident !== undefined) { meta.is_resident = args.is_resident; changes.push(args.is_resident ? "paged in" : "paged out"); }
-  if (args.content !== undefined) { await writeContent(dir, args.content); changes.push("content"); }
+  await updatePage(row.id, {
+    title: args.title,
+    summary: args.summary,
+    content: args.content,
+    isResident: args.is_resident,
+  });
 
-  meta.updated_at = new Date().toISOString();
-  await writeMeta(dir, meta);
-
-  return `Updated page ${args.id}: ${changes.join(", ")}`;
+  return `Updated page ${args.id}: ${changes.join(", ") || "no changes"}`;
 }
 
 export async function handlePageFree(args: {
   id: number;
   recursive?: boolean;
 }): Promise<string> {
-  await ensureRoot();
-  const dir = await findPageDir(args.id);
-  if (!dir) return `Page ${args.id} not found.`;
+  const row = await getPageByNo(args.id);
+  if (!row) return `Page ${args.id} not found.`;
 
-  const children = await getChildPageDirs(dir);
+  const children = await getChildren(row.id);
   const recursive = args.recursive !== false;
 
   if (children.length > 0 && !recursive) {
-    const childMetas = await Promise.all(children.map((c) => readMeta(c)));
-    const childList = childMetas.map((m) => `  - Page ${m.id}: "${m.title}"`).join("\n");
+    const childList = children.map((c) => `  - Page ${c.page_no}: "${c.title}"`).join("\n");
     return `Page ${args.id} has children. Use recursive=true or free children first:\n${childList}`;
   }
 
-  const meta = await readMeta(dir);
-  await deletePageDir(dir);
-  return `Freed page ${args.id}: "${meta.title}"${children.length > 0 ? ` (and ${children.length} children)` : ""}`;
+  // ON DELETE CASCADE handles descendants when recursive.
+  await deletePage(row.id);
+  return `Freed page ${args.id}: "${row.title}"${children.length > 0 ? ` (and ${children.length} children)` : ""}`;
 }
 
 export async function handlePageMove(args: {
   id: number;
   new_parent_id?: number;
 }): Promise<string> {
-  await ensureRoot();
-  const sourceDir = await findPageDir(args.id);
-  if (!sourceDir) return `Page ${args.id} not found.`;
+  const source = await getPageByNo(args.id);
+  if (!source) return `Page ${args.id} not found.`;
 
-  let targetParentDir: string;
+  let newParentDbId: number | null = null;
   if (args.new_parent_id !== undefined) {
     if (args.new_parent_id === args.id) return "Cannot move a page under itself.";
-    const parentDir = await findPageDir(args.new_parent_id);
-    if (!parentDir) return `Parent page ${args.new_parent_id} not found.`;
-    if (await isDescendantOf(args.new_parent_id, sourceDir)) {
+    const parent = await getPageByNo(args.new_parent_id);
+    if (!parent) return `Parent page ${args.new_parent_id} not found.`;
+    if (await isDescendantOf(source.id, parent.id)) {
       return `Cannot move page ${args.id} under page ${args.new_parent_id} — circular nesting.`;
     }
-    targetParentDir = parentDir;
-  } else {
-    targetParentDir = getRoot();
+    newParentDbId = parent.id;
   }
 
-  await movePageDir(sourceDir, targetParentDir);
+  await setParent(source.id, newParentDbId);
   return `Moved page ${args.id} ${args.new_parent_id ? `under page ${args.new_parent_id}` : "to root"}.`;
 }
 
@@ -159,53 +129,47 @@ export async function handlePageMerge(args: {
   merged_content?: string;
   merged_summary?: string;
 }): Promise<string> {
-  await ensureRoot();
-  const targetDir = await findPageDir(args.target_id);
-  if (!targetDir) return `Target page ${args.target_id} not found.`;
+  const target = await getPageByNo(args.target_id);
+  if (!target) return `Target page ${args.target_id} not found.`;
 
-  const sourceDirs: Array<{ id: number; dir: string }> = [];
-  for (const srcId of args.source_ids) {
-    if (srcId === args.target_id) continue;
-    const dir = await findPageDir(srcId);
-    if (!dir) return `Source page ${srcId} not found.`;
-    sourceDirs.push({ id: srcId, dir });
+  const sources: typeof target[] = [];
+  for (const srcNo of args.source_ids) {
+    if (srcNo === args.target_id) continue;
+    const row = await getPageByNo(srcNo);
+    if (!row) return `Source page ${srcNo} not found.`;
+    sources.push(row);
   }
-
-  if (sourceDirs.length === 0) return "No source pages to merge.";
+  if (sources.length === 0) return "No source pages to merge.";
 
   const strategy = args.strategy || "concatenate";
-  const targetMeta = await readMeta(targetDir);
   let finalContent: string;
 
   if (strategy === "provided") {
     if (!args.merged_content) return "Strategy 'provided' requires merged_content.";
     finalContent = args.merged_content;
   } else {
-    const targetContent = await readContent(targetDir);
-    const parts = [targetContent];
-    for (const src of sourceDirs) {
-      const meta = await readMeta(src.dir);
-      const content = await readContent(src.dir);
-      parts.push(`\n\n---\n\n## Merged from Page ${meta.id}: ${meta.title}\n\n${content}`);
+    const parts = [target.content];
+    for (const src of sources) {
+      parts.push(`\n\n---\n\n## Merged from Page ${src.page_no}: ${src.title}\n\n${src.content}`);
     }
     finalContent = parts.join("");
   }
 
-  await writeContent(targetDir, finalContent);
-  if (args.merged_summary !== undefined) targetMeta.summary = args.merged_summary;
-  targetMeta.updated_at = new Date().toISOString();
-  await writeMeta(targetDir, targetMeta);
+  await updatePage(target.id, {
+    content: finalContent,
+    summary: args.merged_summary,
+  });
 
-  for (const src of sourceDirs) await deletePageDir(src.dir);
+  for (const src of sources) await deletePage(src.id);
 
-  return `Merged pages [${sourceDirs.map((s) => s.id).join(", ")}] into page ${args.target_id} (${strategy}). Sources freed.`;
+  return `Merged pages [${sources.map((s) => s.page_no).join(", ")}] into page ${args.target_id} (${strategy}). Sources freed.`;
 }
 
-// --- Context paging operations ---
+// --- Context (message array) paging ---
 
 export function swapOut(
   messages: ModelMessage[],
-  pageId: number,
+  pageNo: number,
   title: string,
   summary: string,
   swapCount?: number
@@ -217,7 +181,7 @@ export function swapOut(
 
   result.push({
     role: "assistant",
-    content: `[Paged out → Page ${pageId}: "${title}" — ${summary}]`,
+    content: `[Paged out → Page ${pageNo}: "${title}" — ${summary}]`,
   });
 
   return result;
@@ -225,7 +189,7 @@ export function swapOut(
 
 export function swapIn(
   messages: ModelMessage[],
-  pageId: number,
+  pageNo: number,
   title: string,
   content: string
 ): ModelMessage[] {
@@ -233,7 +197,7 @@ export function swapIn(
     ...messages,
     {
       role: "assistant",
-      content: `[Paged in ← Page ${pageId}: "${title}"]\n\n${content}\n\n[End of Page ${pageId}]`,
+      content: `[Paged in ← Page ${pageNo}: "${title}"]\n\n${content}\n\n[End of Page ${pageNo}]`,
     },
   ];
 }

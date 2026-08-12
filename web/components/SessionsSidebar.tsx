@@ -7,15 +7,29 @@ interface Props {
   activeId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onOpenSettings?: () => void;
+  settingsBadge?: string;
 }
 
-export default function SessionsSidebar({ sessions, activeId, onSelect, onCreate }: Props) {
+export default function SessionsSidebar({
+  sessions,
+  activeId,
+  onSelect,
+  onCreate,
+  onOpenSettings,
+  settingsBadge,
+}: Props) {
   return (
     <aside className="sessions" data-testid="sessions-sidebar">
       <h2>Sessions</h2>
       <button className="new" onClick={onCreate} data-testid="new-session">
         + New chat
       </button>
+      {onOpenSettings && (
+        <button className="settings-btn" onClick={onOpenSettings} data-testid="open-settings">
+          ⚙ LLM settings{settingsBadge && <span className="badge">{settingsBadge}</span>}
+        </button>
+      )}
       <ul>
         {sessions.length === 0 && <li style={{ color: "#555", fontStyle: "italic" }}>No sessions yet</li>}
         {sessions.map((s) => (
