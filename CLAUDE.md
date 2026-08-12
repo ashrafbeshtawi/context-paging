@@ -18,7 +18,8 @@ docker compose run --rm flyway   # apply migrations
 
 **Root:**
 - `npm run build` — TypeScript → `build/`
-- `npm start` / `./bin/start.sh` — run the CLI (requires DB up)
+- `npm start` — run the CLI (requires DB up)
+- `./bin/start.sh` — run the CLI; boots Postgres + Flyway via docker compose first
 - `npm test` / `npm run test:watch`
 - Single test file: `npx vitest run tests/storage.test.ts`
 

@@ -80,7 +80,7 @@ cp .env.example .env
 
 ### 2.5. Start the database
 
-Sessions, messages, and pages are persisted in PostgreSQL. Bring it up with Docker Compose, which also runs Flyway migrations:
+Sessions, messages, and pages are persisted in PostgreSQL. `./bin/start.sh` brings it up automatically (including Flyway migrations). If you run the CLI manually instead, start it yourself:
 
 ```bash
 docker compose up -d postgres
