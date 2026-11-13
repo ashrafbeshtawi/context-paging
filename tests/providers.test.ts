@@ -57,6 +57,13 @@ describe("resolveModel", () => {
     expect(model.modelId).toBe("openrouter/auto");
   });
 
+  it("ignores AI_MODEL when another provider is requested", async () => {
+    process.env.AI_PROVIDER = "anthropic";
+    process.env.AI_MODEL = "claude-sonnet-4-20250514";
+    const model = await resolveModel({ provider: "openrouter" });
+    expect(model.modelId).toBe("openrouter/auto");
+  });
+
   it("openrouter apiKey override uses the createOpenRouter factory", async () => {
     const model = await resolveModel({
       provider: "openrouter",

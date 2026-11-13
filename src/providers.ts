@@ -38,8 +38,11 @@ export interface ResolveModelOptions {
 }
 
 export async function resolveModel(opts: ResolveModelOptions = {}): Promise<LanguageModel> {
-  const providerName = (opts.provider || process.env.AI_PROVIDER || "anthropic") as ProviderName;
-  const modelId = opts.model || process.env.AI_MODEL || DEFAULT_MODELS[providerName] || "";
+  const envProvider = process.env.AI_PROVIDER || "anthropic";
+  const providerName = (opts.provider || envProvider) as ProviderName;
+  // AI_MODEL belongs to AI_PROVIDER — another provider gets its own default instead.
+  const envModel = providerName === envProvider ? process.env.AI_MODEL : undefined;
+  const modelId = opts.model || envModel || DEFAULT_MODELS[providerName] || "";
 
   const config = PROVIDERS[providerName];
   if (!config) {

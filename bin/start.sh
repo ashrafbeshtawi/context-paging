@@ -41,14 +41,19 @@ echo ""
 
 # Bring up the database and apply migrations (idempotent if already running).
 # The CLI itself stays a local process — it is an interactive REPL on stdin.
-if command -v docker >/dev/null 2>&1; then
+# Skipped when the Docker daemon is not running or PG_HOST points at an external Postgres.
+case "${PG_HOST:-localhost}" in
+  localhost|127.0.0.1) PG_LOCAL=1 ;;
+  *)                   PG_LOCAL=0 ;;
+esac
+if [ "$PG_LOCAL" = 1 ] && docker info >/dev/null 2>&1; then
   echo "Starting PostgreSQL via docker compose..."
   docker compose up -d postgres
   # </dev/null so the one-shot container doesn't swallow the CLI's stdin
   docker compose run --rm -T flyway </dev/null
   echo ""
 else
-  echo "Warning: docker not found — assuming PostgreSQL is already running on ${PG_HOST:-localhost}:${PG_PORT:-5433}"
+  echo "Warning: not starting PostgreSQL via docker — assuming PostgreSQL is already running on ${PG_HOST:-localhost}:${PG_PORT:-5433}"
   echo ""
 fi
 
