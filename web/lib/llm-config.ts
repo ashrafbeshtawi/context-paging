@@ -18,6 +18,7 @@ export const PROVIDER_OPTIONS = [
   { value: "google", label: "Google" },
   { value: "mistral", label: "Mistral" },
   { value: "xai", label: "xAI" },
+  { value: "openrouter", label: "OpenRouter" },
 ];
 
 export function loadConfig(): LlmConfig {
