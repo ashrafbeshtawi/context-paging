@@ -1,8 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelMessage } from "ai";
 import {
   createSession,
   getSession,
+  getSessionWithMessages,
+  sessionVersion,
+  SessionConflictError,
   getOrCreateSession,
   listSessions,
   deleteSession,
@@ -105,6 +108,85 @@ describe("sessions store", () => {
     expect(await deleteSession(s.id)).toBe(true);
     expect(await getSession(s.id)).toBeNull();
     expect(await getMessages(s.id)).toEqual([]);
+  });
+
+  it("replaceMessages writes a long history in order with one batch insert", async () => {
+    const s = await createSession();
+    const history: ModelMessage[] = Array.from({ length: 250 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user", content: `q${i} with "quotes", \\backslash and {braces}` }
+        : { role: "assistant", content: [{ type: "text", text: `a${i}` }] as ModelMessage["content"] }
+    );
+
+    const { getPool } = await import("../src/db.js");
+    const pool = getPool();
+    const realConnect = pool.connect.bind(pool);
+    let inserts = 0;
+    const spy = vi.spyOn(pool, "connect").mockImplementation((async () => {
+      const client = await realConnect();
+      const realQuery = client.query.bind(client);
+      client.query = ((text: unknown, ...rest: unknown[]) => {
+        if (typeof text === "string" && /INSERT INTO messages/.test(text)) inserts++;
+        return (realQuery as (...a: unknown[]) => unknown)(text, ...rest);
+      }) as typeof client.query;
+      return client;
+    }) as typeof pool.connect);
+
+    try {
+      await replaceMessages(s.id, history);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(inserts).toBe(1);
+    const msgs = await getMessages(s.id);
+    expect(msgs).toEqual(history);
+  });
+
+  it("replaceMessages with an empty array clears the history", async () => {
+    const s = await createSession();
+    await replaceMessages(s.id, [{ role: "user", content: "x" }]);
+    await replaceMessages(s.id, []);
+    expect(await getMessages(s.id)).toEqual([]);
+  });
+
+  it("replaceMessages accepts a write whose expected version is current", async () => {
+    const s = await createSession();
+    await replaceMessages(s.id, [{ role: "user", content: "one" }]);
+    const before = await getSessionWithMessages(s.id);
+    await replaceMessages(
+      s.id,
+      [...before!.messages, { role: "assistant", content: "two" }],
+      { expected: sessionVersion(before!) }
+    );
+    expect(await getMessages(s.id)).toHaveLength(2);
+  });
+
+  it("replaceMessages rejects a stale write and keeps the newer history", async () => {
+    const s = await createSession();
+    const start = await getSessionWithMessages(s.id);
+    const expected = sessionVersion(start!);
+
+    // Turn A finishes first.
+    await replaceMessages(s.id, [
+      { role: "user", content: "A" },
+      { role: "assistant", content: "answer A" },
+    ], { expected });
+
+    // Turn B started from the same state and finishes later.
+    await expect(
+      replaceMessages(s.id, [
+        { role: "user", content: "B" },
+        { role: "assistant", content: "answer B" },
+      ], { expected })
+    ).rejects.toBeInstanceOf(SessionConflictError);
+
+    const msgs = await getMessages(s.id);
+    expect(msgs.map((m) => m.content)).toEqual(["A", "answer A"]);
+  });
+
+  it("replaceMessages throws for an unknown session", async () => {
+    await expect(replaceMessages("missing", [])).rejects.toThrow(/not found/);
   });
 
   it("deleteSession returns false for unknown id", async () => {
