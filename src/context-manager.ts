@@ -167,6 +167,26 @@ export async function handlePageMerge(args: {
 
 // --- Context (message array) paging ---
 
+function pagedOutStub(pageNo: number, title: string, summary: string): ModelMessage {
+  return {
+    role: "assistant",
+    content: `[Paged out → Page ${pageNo}: "${title}" — ${summary}]`,
+  };
+}
+
+// Index at which to cut `messages` so that roughly the last `swapCount`
+// messages are removed without splitting a tool call from its result.
+// Tool results live in `tool` messages right after the assistant message that
+// made the call, so a cut must never land on a `tool` message: if it does, we
+// move it back until the assistant tool-call message goes out too.
+function toolSafeCut(messages: ModelMessage[], swapCount: number): number {
+  let cut = Math.max(0, messages.length - swapCount);
+  while (cut > 0 && cut < messages.length && messages[cut].role === "tool") cut--;
+  return cut;
+}
+
+// Drop the last `swapCount` messages (whole tool-call/tool-result pairs only)
+// and append a single reference to the page they were saved to.
 export function swapOut(
   messages: ModelMessage[],
   pageNo: number,
@@ -175,16 +195,46 @@ export function swapOut(
   swapCount?: number
 ): ModelMessage[] {
   if (!swapCount || swapCount <= 0) return messages;
+  return [...messages.slice(0, toolSafeCut(messages, swapCount)), pagedOutStub(pageNo, title, summary)];
+}
 
-  const keepCount = Math.max(0, messages.length - swapCount);
-  const result = messages.slice(0, keepCount);
+export interface SwapRequest {
+  pageNo: number;
+  title: string;
+  summary: string;
+  swapCount?: number;
+}
 
-  result.push({
-    role: "assistant",
-    content: `[Paged out → Page ${pageNo}: "${title}" — ${summary}]`,
-  });
+// Apply the page_out swaps of one agent turn.
+//
+// `prior` is the history sent to the model (normally ending with the user
+// message that started the turn), `turn` is what the model produced in that
+// turn (response.messages). swap_count always counts against the history
+// BEFORE the current user message, never inside the current turn, so the
+// model's answer and its page_out call/result pairs stay intact. Several swaps
+// are applied in order: each one pages out the next older block. Their stubs
+// stay in chronological order, followed by the current user message and the
+// turn itself.
+export function swapOutTurn(
+  prior: ModelMessage[],
+  turn: ModelMessage[],
+  swaps: SwapRequest[]
+): ModelMessage[] {
+  const active = swaps.filter((s) => s.swapCount && s.swapCount > 0);
+  if (active.length === 0) return [...prior, ...turn];
 
-  return result;
+  const pendingStart =
+    prior.length > 0 && prior[prior.length - 1].role === "user" ? prior.length - 1 : prior.length;
+  let older = prior.slice(0, pendingStart);
+  const pending = prior.slice(pendingStart);
+  const stubs: ModelMessage[] = [];
+
+  for (const s of active) {
+    older = older.slice(0, toolSafeCut(older, s.swapCount!));
+    stubs.unshift(pagedOutStub(s.pageNo, s.title, s.summary));
+  }
+
+  return [...older, ...stubs, ...pending, ...turn];
 }
 
 export function swapIn(
