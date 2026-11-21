@@ -8,7 +8,11 @@ import {
   setParent,
   isDescendantOf,
   getChildren,
+  getPageById,
+  reparentChildren,
 } from "./storage.js";
+import { withTransaction } from "./db.js";
+import type { PageRow } from "./types.js";
 import { formatPageTable } from "./toc.js";
 
 // In the agent's mental model and tool calls, "page id" means the per-session
@@ -129,40 +133,87 @@ export async function handlePageMerge(args: {
   merged_content?: string;
   merged_summary?: string;
 }): Promise<string> {
-  const target = await getPageByNo(args.target_id);
-  if (!target) return `Target page ${args.target_id} not found.`;
-
-  const sources: typeof target[] = [];
-  for (const srcNo of args.source_ids) {
-    if (srcNo === args.target_id) continue;
-    const row = await getPageByNo(srcNo);
-    if (!row) return `Source page ${srcNo} not found.`;
-    sources.push(row);
-  }
-  if (sources.length === 0) return "No source pages to merge.";
-
   const strategy = args.strategy || "concatenate";
-  let finalContent: string;
-
-  if (strategy === "provided") {
-    if (!args.merged_content) return "Strategy 'provided' requires merged_content.";
-    finalContent = args.merged_content;
-  } else {
-    const parts = [target.content];
-    for (const src of sources) {
-      parts.push(`\n\n---\n\n## Merged from Page ${src.page_no}: ${src.title}\n\n${src.content}`);
-    }
-    finalContent = parts.join("");
+  if (strategy === "provided" && !args.merged_content) {
+    return "Strategy 'provided' requires merged_content.";
   }
 
-  await updatePage(target.id, {
-    content: finalContent,
-    summary: args.merged_summary,
+  // All reads and writes run in one transaction: a failure halfway must not
+  // leave the content duplicated in the target while some sources still exist.
+  return withTransaction(async () => {
+    const target = await getPageByNo(args.target_id);
+    if (!target) return `Target page ${args.target_id} not found.`;
+
+    const sources: PageRow[] = [];
+    for (const srcNo of new Set(args.source_ids)) {
+      if (srcNo === args.target_id) continue;
+      const row = await getPageByNo(srcNo);
+      if (!row) return `Source page ${srcNo} not found.`;
+      sources.push(row);
+    }
+    if (sources.length === 0) return "No source pages to merge.";
+
+    let finalContent: string;
+    if (strategy === "provided") {
+      finalContent = args.merged_content!;
+    } else {
+      const parts = [target.content];
+      for (const src of sources) {
+        parts.push(`\n\n---\n\n## Merged from Page ${src.page_no}: ${src.title}\n\n${src.content}`);
+      }
+      finalContent = parts.join("");
+    }
+
+    // pages.parent_id is ON DELETE CASCADE, so deleting a source would also
+    // delete everything below it. First lift the target out of any source's
+    // subtree, then hand the sources' children to the target, and only then
+    // delete the (by now childless) sources.
+    const sourceIds = new Set(sources.map((s) => String(s.id)));
+    const notes: string[] = [];
+
+    // Walk up from the target; remember the highest ancestor that is a source.
+    let topSource: PageRow | null = null;
+    let ancestorId = target.parent_id;
+    while (ancestorId !== null) {
+      const ancestor = await getPageById(ancestorId);
+      if (!ancestor) break;
+      if (sourceIds.has(String(ancestor.id))) topSource = ancestor;
+      ancestorId = ancestor.parent_id;
+    }
+    if (topSource) {
+      await setParent(target.id, topSource.parent_id);
+      const newParent = topSource.parent_id === null ? null : await getPageById(topSource.parent_id);
+      notes.push(
+        `Page ${target.page_no} moved ${newParent ? `under page ${newParent.page_no}` : "to root"} (it was nested in source page ${topSource.page_no}).`
+      );
+    }
+
+    const moved: PageRow[] = [];
+    for (const src of sources) {
+      moved.push(...(await reparentChildren(src.id, target.id, target.id)));
+    }
+    // Sources nested in other sources were moved too, but they are deleted below.
+    const movedKept = moved.filter((m) => !sourceIds.has(String(m.id)));
+    if (movedKept.length > 0) {
+      const list = movedKept
+        .sort((a, b) => a.page_no - b.page_no)
+        .map((m) => m.page_no)
+        .join(", ");
+      notes.push(`Moved child pages [${list}] under page ${target.page_no}.`);
+    }
+
+    await updatePage(target.id, {
+      content: finalContent,
+      summary: args.merged_summary,
+    });
+
+    for (const src of sources) await deletePage(src.id);
+
+    return [
+      `Merged pages [${sources.map((s) => s.page_no).join(", ")}] into page ${args.target_id} (${strategy}). Sources freed.`,
+      ...notes,
+    ].join(" ");
   });
-
-  for (const src of sources) await deletePage(src.id);
-
-  return `Merged pages [${sources.map((s) => s.page_no).join(", ")}] into page ${args.target_id} (${strategy}). Sources freed.`;
 }
 
 // --- Context (message array) paging ---

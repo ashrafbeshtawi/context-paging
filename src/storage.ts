@@ -148,6 +148,23 @@ export async function isDescendantOf(
   return false;
 }
 
+// Move every child of fromParentId (except excludeId) under toParentId.
+// Returns the moved rows ordered by page_no.
+export async function reparentChildren(
+  fromParentId: number,
+  toParentId: number | null,
+  excludeId?: number
+): Promise<PageRow[]> {
+  const sessionId = currentSessionId();
+  const res = await query<PageRow>(
+    `UPDATE pages SET parent_id = $1, updated_at = NOW()
+     WHERE parent_id = $2 AND session_id = $3 AND ($4::bigint IS NULL OR id <> $4)
+     RETURNING *`,
+    [toParentId, fromParentId, sessionId, excludeId ?? null]
+  );
+  return res.rows.sort((a, b) => a.page_no - b.page_no);
+}
+
 export async function setParent(id: number, newParentId: number | null): Promise<PageRow | null> {
   const sessionId = currentSessionId();
   const res = await query<PageRow>(

@@ -323,6 +323,82 @@ describe("handlePageMerge", () => {
       expect(result).toContain("merged_content");
     });
   });
+
+  it("moves the children of a source under the target instead of deleting them", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "target body", summary: "" }); // 1
+      await handlePageOut({ title: "S", content: "src body", summary: "" }); // 2
+      await handlePageOut({ title: "C1", content: "c1", summary: "", parent_id: 2 }); // 3
+      await handlePageOut({ title: "C2", content: "c2", summary: "", parent_id: 2 }); // 4
+
+      const result = await handlePageMerge({ source_ids: [2], target_id: 1 });
+      expect(result).toContain("Moved child pages [3, 4] under page 1");
+
+      expect(await getPageByNo(2)).toBeNull();
+      const target = await getPageByNo(1);
+      expect(target?.content).toContain("src body");
+      const children = await getChildren(target!.id);
+      expect(children.map((c) => c.page_no)).toEqual([3, 4]);
+      expect((await getPageByNo(3))?.content).toBe("c1");
+      expect((await getPageByNo(4))?.content).toBe("c2");
+    });
+  });
+
+  it("keeps the target when a parent is merged into its own child", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "Root", content: "", summary: "" }); // 1
+      await handlePageOut({ title: "P", content: "parent body", summary: "", parent_id: 1 }); // 2
+      await handlePageOut({ title: "Sibling", content: "sib", summary: "", parent_id: 2 }); // 3
+      await handlePageOut({ title: "Mid", content: "mid", summary: "", parent_id: 2 }); // 4
+      await handlePageOut({ title: "T", content: "target body", summary: "", parent_id: 4 }); // 5
+
+      const result = await handlePageMerge({ source_ids: [2], target_id: 5 });
+      expect(result).toContain("Page 5 moved under page 1");
+
+      expect(await getPageByNo(2)).toBeNull();
+      const target = await getPageByNo(5);
+      expect(target).not.toBeNull();
+      expect(target?.content).toContain("target body");
+      expect(target?.content).toContain("parent body");
+
+      const root = await getPageByNo(1);
+      expect(target?.parent_id).toBe(root!.id);
+      const children = await getChildren(target!.id);
+      expect(children.map((c) => c.page_no)).toEqual([3, 4]);
+    });
+  });
+
+  it("moves a target nested under two chained sources to above both", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "A", content: "a", summary: "" }); // 1
+      await handlePageOut({ title: "B", content: "b", summary: "", parent_id: 1 }); // 2
+      await handlePageOut({ title: "T", content: "t", summary: "", parent_id: 2 }); // 3
+      await handlePageOut({ title: "L", content: "leaf", summary: "", parent_id: 1 }); // 4
+
+      const result = await handlePageMerge({ source_ids: [1, 2], target_id: 3 });
+      expect(result).toContain("moved to root");
+      expect(result).toContain("Moved child pages [4] under page 3");
+
+      const target = await getPageByNo(3);
+      expect(target?.parent_id).toBeNull();
+      expect(target?.content).toContain("a");
+      expect(target?.content).toContain("b");
+      expect(await getPageByNo(1)).toBeNull();
+      expect(await getPageByNo(2)).toBeNull();
+      expect((await getChildren(target!.id)).map((c) => c.page_no)).toEqual([4]);
+    });
+  });
+
+  it("merges a repeated source id only once", async () => {
+    await withSession(sid, async () => {
+      await handlePageOut({ title: "T", content: "target", summary: "" });
+      await handlePageOut({ title: "S", content: "unique-src", summary: "" });
+      const result = await handlePageMerge({ source_ids: [2, 2], target_id: 1 });
+      expect(result).toContain("Merged pages [2]");
+      const target = await getPageByNo(1);
+      expect(target?.content.split("unique-src")).toHaveLength(2);
+    });
+  });
 });
 
 describe("swapOut", () => {
