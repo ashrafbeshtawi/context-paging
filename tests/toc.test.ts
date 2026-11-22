@@ -1,24 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { formatPageTable } from "../src/toc.js";
-import type { PageNode, PageRow } from "../src/types.js";
+import type { PageMeta, PageNode } from "../src/types.js";
 
-function row(overrides: Partial<PageRow> = {}): PageRow {
+function row(overrides: Partial<PageMeta> = {}): PageMeta {
   return {
     id: 100,
-    session_id: "s",
     page_no: 1,
     parent_id: null,
     title: "Test",
     summary: "",
-    content: "",
     is_resident: false,
-    created_at: new Date(0),
-    updated_at: new Date(0),
     ...overrides,
   };
 }
 
-function node(rowOverrides: Partial<PageRow> = {}, children: PageNode[] = []): PageNode {
+function node(rowOverrides: Partial<PageMeta> = {}, children: PageNode[] = []): PageNode {
   return { row: row(rowOverrides), children };
 }
 

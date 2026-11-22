@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from "vitest";
 import {
   withSession,
   insertPage,
@@ -12,7 +12,7 @@ import {
   isDescendantOf,
   currentSessionId,
 } from "../src/storage.js";
-import { closePool } from "../src/db.js";
+import { closePool, getPool } from "../src/db.js";
 import { resetDb, makeTestSession } from "./helpers/db.js";
 
 describe("storage (DB-backed)", () => {
@@ -102,6 +102,51 @@ describe("storage (DB-backed)", () => {
     });
   });
 
+  it("buildTree issues a single query for a 3-level tree and omits content", async () => {
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "sa", content: "big A" });
+      const a1 = await insertPage({ title: "A1", summary: "", content: "big A1", parentPageNo: a.page_no });
+      await insertPage({ title: "A1x", summary: "", content: "big A1x", parentPageNo: a1.page_no });
+      await insertPage({ title: "B", summary: "", content: "big B" });
+
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        const tree = await buildTree();
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(tree.map((n) => n.row.title)).toEqual(["A", "B"]);
+        expect(tree[0].children.map((c) => c.row.title)).toEqual(["A1"]);
+        expect(tree[0].children[0].children.map((c) => c.row.title)).toEqual(["A1x"]);
+        expect(tree[0].row).not.toHaveProperty("content");
+        expect(tree[0].row.summary).toBe("sa");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it("buildTree(rootParentId) returns only the subtree under that page", async () => {
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "", content: "" });
+      const a1 = await insertPage({ title: "A1", summary: "", content: "", parentPageNo: a.page_no });
+      await insertPage({ title: "A1x", summary: "", content: "", parentPageNo: a1.page_no });
+      await insertPage({ title: "B", summary: "", content: "" });
+
+      const sub = await buildTree(a.id);
+      expect(sub.map((n) => n.row.title)).toEqual(["A1"]);
+      expect(sub[0].children.map((c) => c.row.title)).toEqual(["A1x"]);
+    });
+  });
+
+  it("buildTree only includes pages from the active session", async () => {
+    const sid2 = await makeTestSession("session-two");
+    await withSession(sid2, () => insertPage({ title: "Other", summary: "", content: "" }));
+    await withSession(sid, async () => {
+      await insertPage({ title: "Mine", summary: "", content: "" });
+      const tree = await buildTree();
+      expect(tree.map((n) => n.row.title)).toEqual(["Mine"]);
+    });
+  });
+
   it("updatePage mutates fields and bumps updated_at", async () => {
     await withSession(sid, async () => {
       const p = await insertPage({ title: "Orig", summary: "s", content: "c" });
@@ -170,6 +215,21 @@ describe("storage (DB-backed)", () => {
       expect(await isDescendantOf(a.id, c.id)).toBe(true);
       expect(await isDescendantOf(b.id, c.id)).toBe(true);
       expect(await isDescendantOf(c.id, a.id)).toBe(false);
+      expect(await isDescendantOf(c.id, c.id)).toBe(false);
+      expect(await isDescendantOf(a.id, a.id)).toBe(false);
+    });
+  });
+
+  it("isDescendantOf is false for unrelated pages and other sessions", async () => {
+    const sid2 = await makeTestSession("session-two");
+    const other = await withSession(sid2, () =>
+      insertPage({ title: "Other", summary: "", content: "" })
+    );
+    await withSession(sid, async () => {
+      const a = await insertPage({ title: "A", summary: "", content: "" });
+      const b = await insertPage({ title: "B", summary: "", content: "" });
+      expect(await isDescendantOf(a.id, b.id)).toBe(false);
+      expect(await isDescendantOf(a.id, other.id)).toBe(false);
     });
   });
 
