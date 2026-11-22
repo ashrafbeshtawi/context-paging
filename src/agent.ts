@@ -8,7 +8,8 @@ import {
   handlePageFree,
   handlePageMove,
   handlePageMerge,
-  swapOut,
+  swapOutTurn,
+  type SwapRequest,
 } from "./context-manager.js";
 
 const SYSTEM_PROMPT = `You are an AI assistant powered by Context Paging — virtual memory for your context window.
@@ -60,7 +61,9 @@ export function createTools() {
           .int()
           .min(0)
           .optional()
-          .describe("Number of recent messages to swap out of context (default: 0)"),
+          .describe(
+            "Number of most recent messages from before the user's current request to swap out of context (default: 0). Messages of the current turn are never removed; tool calls are removed together with their results. Always counted from the history as you see it, so several page_out calls in one turn overlap: swap_count 4 twice removes the same 4 messages, 2 then 5 removes 5."
+          ),
       }),
       execute: async (args) => {
         const result = await handlePageOut(args);
@@ -192,8 +195,10 @@ ${pageTable}`;
   const responseText = await finalResult.text;
 
   const response = await finalResult.response;
-  let updatedMessages: ModelMessage[] = [...messages, ...response.messages];
 
+  // Collect page_out swaps in call order, then apply them against the history
+  // that existed before this turn (never against response.messages).
+  const swaps: SwapRequest[] = [];
   for (const step of (await finalResult.steps)) {
     for (const toolResult of step.toolResults) {
       if (
@@ -210,17 +215,18 @@ ${pageTable}`;
         if (res._swap && res._swap > 0) {
           const idMatch = res.result.match(/Page (\d+)/);
           const pageId = idMatch ? parseInt(idMatch[1], 10) : 0;
-          updatedMessages = swapOut(
-            updatedMessages,
-            pageId,
-            res._title || "Untitled",
-            res._summary || "",
-            res._swap
-          );
+          swaps.push({
+            pageNo: pageId,
+            title: res._title || "Untitled",
+            summary: res._summary || "",
+            swapCount: res._swap,
+          });
         }
       }
     }
   }
+
+  const updatedMessages = swapOutTurn(messages, response.messages, swaps);
 
   return {
     messages: updatedMessages,

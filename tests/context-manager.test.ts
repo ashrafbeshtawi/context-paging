@@ -9,6 +9,7 @@ import {
   handlePageMove,
   handlePageMerge,
   swapOut,
+  swapOutTurn,
   swapIn,
 } from "../src/context-manager.js";
 import { withSession, getPageByNo, getChildren } from "../src/storage.js";
@@ -351,6 +352,116 @@ describe("swapOut", () => {
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe("assistant");
     expect(result[0].content).toContain("Paged out");
+  });
+
+  it("never splits a tool call from its result", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "hello" },
+      callMsg("c1", "page_table"),
+      resultMsg("c1", "page_table"),
+      { role: "assistant", content: "done" },
+    ];
+    // Cutting 2 would land on the tool result; the call goes out with it.
+    const result = swapOut(messages, 3, "T", "s", 2);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(messages[0]);
+    expect(result[1].content).toContain("Page 3");
+    expect(orphanedToolCalls(result)).toEqual([]);
+  });
+});
+
+function callMsg(id: string, toolName: string): ModelMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "tool-call", toolCallId: id, toolName, input: {} }],
+  };
+}
+
+function resultMsg(id: string, toolName: string): ModelMessage {
+  return {
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: id, toolName, output: { type: "text", value: "ok" } }],
+  };
+}
+
+function orphanedToolCalls(messages: ModelMessage[]): string[] {
+  const calls = new Set<string>();
+  const results = new Set<string>();
+  for (const m of messages) {
+    if (typeof m.content === "string") continue;
+    for (const part of m.content) {
+      if (part.type === "tool-call") calls.add(part.toolCallId);
+      if (part.type === "tool-result") results.add(part.toolCallId);
+    }
+  }
+  return [...calls].filter((id) => !results.has(id)).concat([...results].filter((id) => !calls.has(id)));
+}
+
+describe("swapOutTurn", () => {
+  const prior: ModelMessage[] = [
+    { role: "user", content: "u1" },
+    { role: "assistant", content: "a1" },
+    { role: "user", content: "u2" },
+    callMsg("old", "page_table"),
+    resultMsg("old", "page_table"),
+    { role: "assistant", content: "a2" },
+    { role: "user", content: "save that" },
+  ];
+  const turn: ModelMessage[] = [
+    callMsg("p1", "page_out"),
+    resultMsg("p1", "page_out"),
+    { role: "assistant", content: "Saved." },
+  ];
+
+  it("returns prior + turn unchanged without swaps", () => {
+    expect(swapOutTurn(prior, turn, [])).toEqual([...prior, ...turn]);
+    expect(swapOutTurn(prior, turn, [{ pageNo: 1, title: "x", summary: "", swapCount: 0 }])).toEqual([
+      ...prior,
+      ...turn,
+    ]);
+  });
+
+  it("counts swap_count before the current user message and keeps the turn intact", () => {
+    const result = swapOutTurn(prior, turn, [{ pageNo: 1, title: "A", summary: "s", swapCount: 1 }]);
+    expect(result).toEqual([
+      ...prior.slice(0, 5),
+      expect.objectContaining({ role: "assistant", content: expect.stringContaining("Page 1") }),
+      prior[6],
+      ...turn,
+    ]);
+  });
+
+  it("drops whole tool-call/tool-result pairs only", () => {
+    const result = swapOutTurn(prior, turn, [{ pageNo: 1, title: "A", summary: "s", swapCount: 2 }]);
+    // a2 + tool result requested; the matching tool call goes too.
+    expect(result.slice(0, 3)).toEqual(prior.slice(0, 3));
+    expect(result[3].content).toContain("Page 1");
+    expect(result.slice(4)).toEqual([prior[6], ...turn]);
+    expect(orphanedToolCalls(result)).toEqual([]);
+  });
+
+  it("counts every swap against the original history, so equal swaps overlap", () => {
+    const result = swapOutTurn(prior, turn, [
+      { pageNo: 1, title: "first", summary: "", swapCount: 1 },
+      { pageNo: 2, title: "second", summary: "", swapCount: 1 },
+    ]);
+    // Only a2 goes, not a2 and the tool pair before it.
+    expect(result.slice(0, 5)).toEqual(prior.slice(0, 5));
+    expect(result[5].content).toContain('Page 1: "first"');
+    expect(result[6].content).toContain('Page 2: "second"');
+    expect(result.slice(7)).toEqual([prior[6], ...turn]);
+  });
+
+  it("removes only as much as the largest swap and orders stubs by reach", () => {
+    const result = swapOutTurn(prior, turn, [
+      { pageNo: 1, title: "recent", summary: "", swapCount: 1 },
+      { pageNo: 2, title: "wider", summary: "", swapCount: 4 },
+    ]);
+    expect(result.slice(0, 2)).toEqual(prior.slice(0, 2));
+    expect(result[2].content).toContain('Page 2: "wider"');
+    expect(result[3].content).toContain('Page 1: "recent"');
+    expect(result.slice(4)).toEqual([prior[6], ...turn]);
+    expect(orphanedToolCalls(result)).toEqual([]);
   });
 });
 
