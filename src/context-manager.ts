@@ -211,10 +211,12 @@ export interface SwapRequest {
 // message that started the turn), `turn` is what the model produced in that
 // turn (response.messages). swap_count always counts against the history
 // BEFORE the current user message, never inside the current turn, so the
-// model's answer and its page_out call/result pairs stay intact. Several swaps
-// are applied in order: each one pages out the next older block. Their stubs
-// stay in chronological order, followed by the current user message and the
-// turn itself.
+// model's answer and its page_out call/result pairs stay intact. The model
+// sees the full unswapped history during the whole turn, so every swap counts
+// against that same original history: swaps overlap, and only the largest one
+// decides how much is removed (4 then 4 removes 4, not 8). The stubs are
+// ordered by how far back their swap reaches, followed by the current user
+// message and the turn itself.
 export function swapOutTurn(
   prior: ModelMessage[],
   turn: ModelMessage[],
@@ -225,16 +227,16 @@ export function swapOutTurn(
 
   const pendingStart =
     prior.length > 0 && prior[prior.length - 1].role === "user" ? prior.length - 1 : prior.length;
-  let older = prior.slice(0, pendingStart);
+  const older = prior.slice(0, pendingStart);
   const pending = prior.slice(pendingStart);
-  const stubs: ModelMessage[] = [];
 
-  for (const s of active) {
-    older = older.slice(0, toolSafeCut(older, s.swapCount!));
-    stubs.unshift(pagedOutStub(s.pageNo, s.title, s.summary));
-  }
+  const cuts = active.map((s) => ({ s, cut: toolSafeCut(older, s.swapCount!) }));
+  const cut = Math.min(...cuts.map((c) => c.cut));
+  const stubs = cuts
+    .sort((a, b) => a.cut - b.cut)
+    .map(({ s }) => pagedOutStub(s.pageNo, s.title, s.summary));
 
-  return [...older, ...stubs, ...pending, ...turn];
+  return [...older.slice(0, cut), ...stubs, ...pending, ...turn];
 }
 
 export function swapIn(

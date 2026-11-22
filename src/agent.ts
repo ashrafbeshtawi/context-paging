@@ -62,7 +62,7 @@ export function createTools() {
           .min(0)
           .optional()
           .describe(
-            "Number of most recent messages from before the user's current request to swap out of context (default: 0). Messages of the current turn are never removed; tool calls are removed together with their results."
+            "Number of most recent messages from before the user's current request to swap out of context (default: 0). Messages of the current turn are never removed; tool calls are removed together with their results. Always counted from the history as you see it, so several page_out calls in one turn overlap: swap_count 4 twice removes the same 4 messages, 2 then 5 removes 5."
           ),
       }),
       execute: async (args) => {

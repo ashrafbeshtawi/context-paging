@@ -178,10 +178,10 @@ describe("runAgent page_out swapping", () => {
     expectTurnIntact(result.messages, "Done.");
   });
 
-  it("two page_outs in one turn page out consecutive older blocks", async () => {
+  it("two page_outs in one turn count against the same history", async () => {
     const model = mockModel([
       toolCallStep([{ id: "c1", input: pageOutInput("Token", 2) }]),
-      toolCallStep([{ id: "c2", input: pageOutInput("Auth", 2) }]),
+      toolCallStep([{ id: "c2", input: pageOutInput("Auth", 4) }]),
       textStep("Both saved."),
     ]);
     const result = await withSession(sid, () => runAgent([...history], { model }));
@@ -194,5 +194,20 @@ describe("runAgent page_out swapping", () => {
     const turnText = JSON.stringify(result.messages.slice(3));
     expect(turnText).toContain('"toolCallId":"c1"');
     expect(turnText).toContain('"toolCallId":"c2"');
+  });
+
+  it("the same swap_count twice removes those messages once, not twice", async () => {
+    const model = mockModel([
+      toolCallStep([{ id: "c1", input: pageOutInput("Token", 2) }]),
+      toolCallStep([{ id: "c2", input: pageOutInput("Token again", 2) }]),
+      textStep("Saved."),
+    ]);
+    const result = await withSession(sid, () => runAgent([...history], { model }));
+
+    expect(result.messages.slice(0, 2)).toEqual(history.slice(0, 2));
+    expect(stub(result.messages[2])).toContain('Page 1: "Token"');
+    expect(stub(result.messages[3])).toContain('Page 2: "Token again"');
+    expect(result.messages[4]).toEqual(history[4]);
+    expectTurnIntact(result.messages, "Saved.");
   });
 });

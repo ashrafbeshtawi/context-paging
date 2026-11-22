@@ -440,15 +440,27 @@ describe("swapOutTurn", () => {
     expect(orphanedToolCalls(result)).toEqual([]);
   });
 
-  it("applies several swaps in order, older blocks first in the result", () => {
+  it("counts every swap against the original history, so equal swaps overlap", () => {
     const result = swapOutTurn(prior, turn, [
-      { pageNo: 1, title: "recent", summary: "", swapCount: 3 },
-      { pageNo: 2, title: "older", summary: "", swapCount: 2 },
+      { pageNo: 1, title: "first", summary: "", swapCount: 1 },
+      { pageNo: 2, title: "second", summary: "", swapCount: 1 },
     ]);
-    expect(result[0]).toEqual(prior[0]);
-    expect(result[1].content).toContain('Page 2: "older"');
-    expect(result[2].content).toContain('Page 1: "recent"');
-    expect(result.slice(3)).toEqual([prior[6], ...turn]);
+    // Only a2 goes, not a2 and the tool pair before it.
+    expect(result.slice(0, 5)).toEqual(prior.slice(0, 5));
+    expect(result[5].content).toContain('Page 1: "first"');
+    expect(result[6].content).toContain('Page 2: "second"');
+    expect(result.slice(7)).toEqual([prior[6], ...turn]);
+  });
+
+  it("removes only as much as the largest swap and orders stubs by reach", () => {
+    const result = swapOutTurn(prior, turn, [
+      { pageNo: 1, title: "recent", summary: "", swapCount: 1 },
+      { pageNo: 2, title: "wider", summary: "", swapCount: 4 },
+    ]);
+    expect(result.slice(0, 2)).toEqual(prior.slice(0, 2));
+    expect(result[2].content).toContain('Page 2: "wider"');
+    expect(result[3].content).toContain('Page 1: "recent"');
+    expect(result.slice(4)).toEqual([prior[6], ...turn]);
     expect(orphanedToolCalls(result)).toEqual([]);
   });
 });
