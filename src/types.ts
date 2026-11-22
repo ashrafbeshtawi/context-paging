@@ -13,8 +13,11 @@ export interface PageRow {
   updated_at: Date;
 }
 
+/** Page fields needed for the page table — everything except content and timestamps. */
+export type PageMeta = Pick<PageRow, "id" | "page_no" | "parent_id" | "title" | "summary" | "is_resident">;
+
 export interface PageNode {
-  row: PageRow;
+  row: PageMeta;
   children: PageNode[];
 }
 

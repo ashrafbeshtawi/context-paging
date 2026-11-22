@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { query } from "./db.js";
-import type { PageNode, PageRow } from "./types.js";
+import type { PageMeta, PageNode, PageRow } from "./types.js";
 
 const sessionStorage = new AsyncLocalStorage<string>();
 
@@ -76,30 +76,46 @@ export async function getPageById(id: number): Promise<PageRow | null> {
   return res.rows[0] || null;
 }
 
-export async function getChildren(parentId: number | null): Promise<PageRow[]> {
+// Columns needed for the page table. Content is deliberately excluded: it can
+// be large and the table only shows title, summary and residency.
+const META_COLUMNS = "id, page_no, parent_id, title, summary, is_resident";
+
+export async function getChildren(parentId: number | null): Promise<PageMeta[]> {
   const sessionId = currentSessionId();
   if (parentId === null) {
-    const res = await query<PageRow>(
-      "SELECT * FROM pages WHERE session_id = $1 AND parent_id IS NULL ORDER BY page_no",
+    const res = await query<PageMeta>(
+      `SELECT ${META_COLUMNS} FROM pages WHERE session_id = $1 AND parent_id IS NULL ORDER BY page_no`,
       [sessionId]
     );
     return res.rows;
   }
-  const res = await query<PageRow>(
-    "SELECT * FROM pages WHERE session_id = $1 AND parent_id = $2 ORDER BY page_no",
+  const res = await query<PageMeta>(
+    `SELECT ${META_COLUMNS} FROM pages WHERE session_id = $1 AND parent_id = $2 ORDER BY page_no`,
     [sessionId, parentId]
   );
   return res.rows;
 }
 
 export async function buildTree(rootParentId: number | null = null): Promise<PageNode[]> {
-  const rows = await getChildren(rootParentId);
-  const nodes: PageNode[] = [];
-  for (const row of rows) {
-    const children = await buildTree(row.id);
-    nodes.push({ row, children });
+  // One query for the whole session, then assemble the tree in memory.
+  const sessionId = currentSessionId();
+  const res = await query<PageMeta>(
+    `SELECT ${META_COLUMNS} FROM pages WHERE session_id = $1 ORDER BY page_no`,
+    [sessionId]
+  );
+
+  // Rows arrive ordered by page_no, so each children list stays ordered too.
+  const childrenOf = new Map<number | null, PageMeta[]>();
+  for (const row of res.rows) {
+    const list = childrenOf.get(row.parent_id);
+    if (list) list.push(row);
+    else childrenOf.set(row.parent_id, [row]);
   }
-  return nodes;
+
+  const build = (parentId: number | null): PageNode[] =>
+    (childrenOf.get(parentId) ?? []).map((row) => ({ row, children: build(row.id) }));
+
+  return build(rootParentId);
 }
 
 export async function updatePage(
@@ -137,15 +153,22 @@ export async function isDescendantOf(
   candidateAncestorId: number,
   pageId: number
 ): Promise<boolean> {
-  // Walk up from pageId via parent_id and return true if we ever hit candidateAncestorId.
-  // Scoped to the current session by getPageById.
-  let current = await getPageById(pageId);
-  while (current) {
-    if (current.parent_id === candidateAncestorId) return true;
-    if (current.parent_id === null) return false;
-    current = await getPageById(current.parent_id);
-  }
-  return false;
+  // Walk up from pageId via parent_id in a single recursive query and report
+  // whether candidateAncestorId is one of its ancestors. Scoped to the session.
+  // UNION (not UNION ALL) stops the recursion if the data ever contains a cycle.
+  const sessionId = currentSessionId();
+  const res = await query<{ found: boolean }>(
+    `WITH RECURSIVE ancestors(id) AS (
+       SELECT parent_id FROM pages WHERE id = $1 AND session_id = $3 AND parent_id IS NOT NULL
+       UNION
+       SELECT p.parent_id FROM pages p
+         JOIN ancestors a ON p.id = a.id
+        WHERE p.session_id = $3 AND p.parent_id IS NOT NULL
+     )
+     SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = $2) AS found`,
+    [pageId, candidateAncestorId, sessionId]
+  );
+  return res.rows[0]?.found ?? false;
 }
 
 export async function setParent(id: number, newParentId: number | null): Promise<PageRow | null> {
