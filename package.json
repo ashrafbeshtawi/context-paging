@@ -14,7 +14,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.152",
     "@ai-sdk/mistral": "^3.0.27",
+    "@ai-sdk/openai": "^3.0.147",
+    "@ai-sdk/xai": "^3.0.156",
     "@openrouter/ai-sdk-provider": "^2.10.0",
     "ai": "^6.0.141",
     "dotenv": "^17.3.1",
