@@ -44,7 +44,7 @@ describe("runAgent provider errors", () => {
   });
 
   it("gives no key hint for other provider errors", async () => {
-    const model = createRejectingModel(529, "Overloaded");
+    const model = createRejectingModel(529, "Overloaded.");
 
     const run = withSession(sid, () => runAgent([{ role: "user", content: "hi" }], { model }));
 

@@ -250,5 +250,5 @@ export function describeProviderError(error: unknown): Error {
   const keyHint = error.statusCode === 401 || error.statusCode === 403
     ? " Check the API key in LLM settings or the server's .env."
     : "";
-  return new Error(`The model provider rejected the request${status}: ${error.message}.${keyHint}`);
+  return new Error(`The model provider rejected the request${status}: ${error.message.replace(/\.$/, "")}.${keyHint}`);
 }
