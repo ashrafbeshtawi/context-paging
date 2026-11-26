@@ -27,7 +27,7 @@ docker compose run --rm flyway   # apply migrations
 - `npm run build` / `npm start`
 - `npm test` — vitest with jsdom + @vitejs/plugin-react (requires DB up)
 
-Both vitest configs use `fileParallelism: false` — tests share a single Postgres database and reset it between cases, so they cannot run in parallel. The root `vitest.config.ts` has `include: ["tests/**/*.test.ts"]` so it does not pick up `web/tests/`.
+Both vitest configs use `fileParallelism: false` — tests share one Postgres database and reset it between cases, so they cannot run in parallel. That database is `context_paging_test` (override with `PG_TEST_DATABASE`), not the app's: `tests/global-setup.ts` recreates it on every run and applies `migrations/`, so running tests never touches your sessions. The root `vitest.config.ts` has `include: ["tests/**/*.test.ts"]` so it does not pick up `web/tests/`.
 
 ## Architecture
 
