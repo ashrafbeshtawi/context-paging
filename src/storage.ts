@@ -1,21 +1,58 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { query } from "./db.js";
+import type pg from "pg";
+import { getPool, query as poolQuery } from "./db.js";
 import type { PageNode, PageRow } from "./types.js";
 
-const sessionStorage = new AsyncLocalStorage<string>();
+interface SessionContext {
+  sessionId: string;
+  // Set inside withSessionTransaction: page queries run on this connection.
+  client?: pg.PoolClient;
+}
+
+const sessionStorage = new AsyncLocalStorage<SessionContext>();
 
 export function withSession<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-  return sessionStorage.run(sessionId, fn);
+  return sessionStorage.run({ sessionId }, fn);
+}
+
+// Like withSession, but every page query inside fn runs in one transaction on
+// one connection, which fn also receives so it can write other tables (e.g.
+// replaceMessages) in the same transaction. Committed when fn resolves, rolled
+// back when it throws, so a refused turn leaves no page changes behind.
+export async function withSessionTransaction<T>(
+  sessionId: string,
+  fn: (client: pg.PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await sessionStorage.run({ sessionId, client }, () => fn(client));
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export function currentSessionId(): string {
-  const id = sessionStorage.getStore();
+  const id = sessionStorage.getStore()?.sessionId;
   if (!id) {
     throw new Error(
       "No session in context. Wrap calls in withSession(sessionId, ...) before invoking page operations."
     );
   }
   return id;
+}
+
+function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
+  text: string,
+  params?: unknown[]
+): Promise<pg.QueryResult<T>> {
+  const client = sessionStorage.getStore()?.client;
+  return client ? client.query<T>(text, params) : poolQuery<T>(text, params);
 }
 
 // --- Page CRUD ---

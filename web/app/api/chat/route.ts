@@ -6,7 +6,7 @@ import {
 } from "@/lib/sessions";
 import type { SessionWithMessages } from "@agent/types";
 import { runAgent } from "@agent/agent";
-import { withSession } from "@agent/storage";
+import { withSession, withSessionTransaction } from "@agent/storage";
 import { resolveModel } from "@agent/providers";
 import { buildContextView } from "@/lib/context-view";
 import { getPageTable } from "@/lib/page-table";
@@ -78,20 +78,21 @@ function streamTurn(body: ChatRequest, session: SessionWithMessages): Response {
           apiKey: body.apiKey,
         });
 
-        const finalMessages = await withSession(session.id, async () => {
+        // Page changes made by the agent's tools and the message write share
+        // one transaction, so a refused or failed turn leaves neither behind.
+        const finalMessages = await withSessionTransaction(session.id, async (client) => {
           const result = await runAgent(initialMessages, {
             model,
             onText: (chunk) => send("text", { chunk }),
             onToolCall: (toolName, args) => send("tool-call", { toolName, args }),
             onToolResult: (toolName, output) => send("tool-result", { toolName, output }),
           });
+          // Refused if another writer (e.g. another server process) changed
+          // the session since this turn read it. The stream is already open,
+          // so the 409 travels in the error event rather than the HTTP status.
+          await replaceMessages(session.id, result.messages, { expected, client });
           return result.messages;
         });
-
-        // Refused if another writer (e.g. another server process) changed the
-        // session since this turn read it. The stream is already open, so the
-        // 409 travels in the error event rather than the HTTP status.
-        await replaceMessages(session.id, finalMessages, { expected });
 
         const pageTable = await withSession(session.id, () => getPageTable());
         send("context", { context: buildContextView(finalMessages), pageTable });

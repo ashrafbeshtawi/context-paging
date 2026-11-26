@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from "vitest";
 import {
   withSession,
+  withSessionTransaction,
   insertPage,
   getPageByNo,
   getPageById,
@@ -196,5 +197,31 @@ describe("storage (DB-backed)", () => {
     expect(b.session_id).toBe(sid2);
     expect(a.page_no).toBe(1);
     expect(b.page_no).toBe(1);
+  });
+
+  it("withSessionTransaction commits page changes when fn resolves", async () => {
+    await withSessionTransaction(sid, async () => {
+      await insertPage({ title: "A", summary: "", content: "" });
+    });
+    expect((await withSession(sid, () => getPageByNo(1)))?.title).toBe("A");
+  });
+
+  it("withSessionTransaction rolls back every page change when fn throws", async () => {
+    const kept = await withSession(sid, () => insertPage({ title: "kept", summary: "", content: "v1" }));
+
+    await expect(
+      withSessionTransaction(sid, async () => {
+        await insertPage({ title: "B", summary: "", content: "" });
+        await updatePage(kept.id, { content: "v2" });
+        // Reads inside the transaction see its own writes.
+        expect((await getPageByNo(2))?.title).toBe("B");
+        throw new Error("refused");
+      })
+    ).rejects.toThrow("refused");
+
+    await withSession(sid, async () => {
+      expect(await getPageByNo(2)).toBeNull();
+      expect((await getPageByNo(1))?.content).toBe("v1");
+    });
   });
 });

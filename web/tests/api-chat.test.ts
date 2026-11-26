@@ -2,6 +2,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSession, getMessages, replaceMessages } from "@/lib/sessions";
 import { parseSseStream } from "@/lib/sse";
 import { closePool } from "@agent/db";
+import { withSession } from "@agent/storage";
+import { getPageTable } from "@/lib/page-table";
 import { resetDb } from "../../tests/helpers/db";
 
 vi.mock("@agent/providers", () => ({
@@ -207,6 +209,68 @@ describe("/api/chat route", () => {
 
     const msgs = await getMessages(s.id);
     expect(msgs.map((m) => m.content)).toEqual(["other", "other answer"]);
+  });
+
+  it("rolls back the turn's page changes when the message write is refused", async () => {
+    const { runAgent } = await import("@agent/agent");
+    const { insertPage, updatePage, getPageByNo } = await import("@agent/storage");
+    const s = await createSession();
+    await withSession(s.id, () => insertPage({ title: "kept", summary: "", content: "original" }));
+
+    vi.mocked(runAgent).mockImplementationOnce(async (messages) => {
+      // The agent pages something out and edits an existing page...
+      await insertPage({ title: "from the lost turn", summary: "", content: "" });
+      const kept = (await getPageByNo(1))!;
+      await updatePage(kept.id, { content: "edited by the lost turn" });
+      // ...while another writer commits a newer history.
+      await replaceMessages(s.id, [{ role: "user", content: "other" }]);
+      return {
+        messages: [...messages, { role: "assistant", content: "late answer" }],
+        response: "late answer",
+      } as Awaited<ReturnType<typeof runAgent>>;
+    });
+
+    const { POST } = await import("@/app/api/chat/route");
+    const events = await readAllEvents(
+      await POST(
+        new Request("http://localhost/api/chat", {
+          method: "POST",
+          body: JSON.stringify({ sessionId: s.id, message: "late" }),
+        })
+      )
+    );
+    expect(events.find((e) => e.event === "error")?.data).toMatchObject({ status: 409 });
+
+    const table = await withSession(s.id, () => getPageTable());
+    expect(table.map((p) => p.title)).toEqual(["kept"]);
+    expect((await withSession(s.id, () => getPageByNo(1)))?.content).toBe("original");
+  });
+
+  it("keeps the turn's page changes when the turn is saved", async () => {
+    const { runAgent } = await import("@agent/agent");
+    const { insertPage } = await import("@agent/storage");
+    vi.mocked(runAgent).mockImplementationOnce(async (messages) => {
+      await insertPage({ title: "paged out", summary: "", content: "" });
+      return {
+        messages: [...messages, { role: "assistant", content: "ok" }],
+        response: "ok",
+      } as Awaited<ReturnType<typeof runAgent>>;
+    });
+
+    const s = await createSession();
+    const { POST } = await import("@/app/api/chat/route");
+    const events = await readAllEvents(
+      await POST(
+        new Request("http://localhost/api/chat", {
+          method: "POST",
+          body: JSON.stringify({ sessionId: s.id, message: "hi" }),
+        })
+      )
+    );
+    expect(events.map((e) => e.event)).toContain("done");
+    const context = events.find((e) => e.event === "context")?.data as { pageTable: { title: string }[] };
+    expect(context.pageTable.map((p) => p.title)).toEqual(["paged out"]);
+    expect((await getMessages(s.id)).map((m) => m.content)).toEqual(["hi", "ok"]);
   });
 
   it("releases the session lock when the turn fails", async () => {
