@@ -33,8 +33,8 @@ describe("resolveModel", () => {
   });
 
   it("throws with helpful message for uninstalled provider", async () => {
-    await expect(resolveModel({ provider: "xai", model: "grok-3" })).rejects.toThrow(
-      /requires package.*@ai-sdk\/xai.*npm install/s
+    await expect(resolveModel({ provider: "azure", model: "gpt-4o" })).rejects.toThrow(
+      /requires package.*@ai-sdk\/azure.*npm install/s
     );
   });
 
