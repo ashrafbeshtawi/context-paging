@@ -10,5 +10,8 @@ export {
   getMessages,
   getSessionWithMessages,
   replaceMessages,
+  sessionVersion,
+  SessionConflictError,
   type SessionSummary,
+  type SessionVersion,
 } from "@agent/sessions";

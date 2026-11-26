@@ -1,11 +1,23 @@
-import { getSessionWithMessages, replaceMessages } from "@/lib/sessions";
+import {
+  getSessionWithMessages,
+  replaceMessages,
+  sessionVersion,
+  SessionConflictError,
+} from "@/lib/sessions";
+import type { SessionWithMessages } from "@agent/types";
 import { runAgent } from "@agent/agent";
-import { withSession } from "@agent/storage";
+import { withSession, withSessionTransaction } from "@agent/storage";
 import { resolveModel } from "@agent/providers";
 import { buildContextView } from "@/lib/context-view";
 import { getPageTable } from "@/lib/page-table";
 
 export const runtime = "nodejs";
+
+const CONFLICT_MESSAGE =
+  "This chat was changed by another turn. Reload the session to see the latest messages.";
+
+// Session ids with a turn in progress in this server process.
+const activeTurns = new Set<string>();
 
 interface ChatRequest {
   sessionId: string;
@@ -26,9 +38,29 @@ export async function POST(req: Request) {
     return badRequest("sessionId and message are required");
   }
 
-  const session = await getSessionWithMessages(body.sessionId);
-  if (!session) return badRequest("session not found", 404);
+  // One turn per session at a time in this process. A second POST while a
+  // turn is running (double submit, second tab, retry) gets a 409 up front
+  // instead of running the agent and overwriting the first turn.
+  if (activeTurns.has(body.sessionId)) {
+    return badRequest(CONFLICT_MESSAGE, 409);
+  }
+  activeTurns.add(body.sessionId);
+  let handedOff = false;
 
+  try {
+    const session = await getSessionWithMessages(body.sessionId);
+    if (!session) return badRequest("session not found", 404);
+
+    const response = streamTurn(body, session);
+    handedOff = true;
+    return response;
+  } finally {
+    if (!handedOff) activeTurns.delete(body.sessionId);
+  }
+}
+
+function streamTurn(body: ChatRequest, session: SessionWithMessages): Response {
+  const expected = sessionVersion(session);
   const userMessage = body.message.trim();
   const initialMessages = [...session.messages, { role: "user" as const, content: userMessage }];
 
@@ -46,24 +78,33 @@ export async function POST(req: Request) {
           apiKey: body.apiKey,
         });
 
-        const finalMessages = await withSession(session.id, async () => {
+        // Page changes made by the agent's tools and the message write share
+        // one transaction, so a refused or failed turn leaves neither behind.
+        const finalMessages = await withSessionTransaction(session.id, async (client) => {
           const result = await runAgent(initialMessages, {
             model,
             onText: (chunk) => send("text", { chunk }),
             onToolCall: (toolName, args) => send("tool-call", { toolName, args }),
             onToolResult: (toolName, output) => send("tool-result", { toolName, output }),
           });
+          // Refused if another writer (e.g. another server process) changed
+          // the session since this turn read it. The stream is already open,
+          // so the 409 travels in the error event rather than the HTTP status.
+          await replaceMessages(session.id, result.messages, { expected, client });
           return result.messages;
         });
-
-        await replaceMessages(session.id, finalMessages);
 
         const pageTable = await withSession(session.id, () => getPageTable());
         send("context", { context: buildContextView(finalMessages), pageTable });
         send("done", { ok: true });
       } catch (err) {
-        send("error", { message: (err as Error).message });
+        if (err instanceof SessionConflictError) {
+          send("error", { message: CONFLICT_MESSAGE, status: 409 });
+        } else {
+          send("error", { message: (err as Error).message });
+        }
       } finally {
+        activeTurns.delete(session.id);
         controller.close();
       }
     },

@@ -75,6 +75,15 @@ export default function Home() {
             ...toRequestBody(llmConfig),
           }),
         });
+        if (resp.status === 409) {
+          const { error } = (await resp.json().catch(() => ({}))) as { error?: string };
+          updateTurn((t) => ({
+            ...t,
+            assistant: `[conflict] ${error ?? "This chat was changed by another turn. Reload the session."}`,
+            pending: false,
+          }));
+          return;
+        }
         if (!resp.ok || !resp.body) {
           const err = await resp.text();
           updateTurn((t) => ({ ...t, assistant: `[error] ${err}`, pending: false }));
@@ -103,8 +112,9 @@ export default function Home() {
             setContext(e.context);
             setPageTable(e.pageTable);
           } else if (ev.event === "error") {
-            const e = ev.data as { message: string };
-            updateTurn((t) => ({ ...t, assistant: `[error] ${e.message}`, pending: false }));
+            const e = ev.data as { message: string; status?: number };
+            const tag = e.status === 409 ? "[conflict]" : "[error]";
+            updateTurn((t) => ({ ...t, assistant: `${tag} ${e.message}`, pending: false }));
           } else if (ev.event === "done") {
             updateTurn((t) => ({ ...t, pending: false }));
           }

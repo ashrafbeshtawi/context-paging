@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import type pg from "pg";
 import { query } from "./db.js";
 import type { SessionRow, SessionWithMessages } from "./types.js";
 
@@ -85,32 +86,53 @@ export async function getSessionWithMessages(id: string): Promise<SessionWithMes
   return { ...session, messages };
 }
 
+// What a turn saw of the session when it started. Passed back to
+// replaceMessages so a write based on stale history is rejected.
+export interface SessionVersion {
+  updatedAt: Date;
+  messageCount: number;
+}
+
+// Thrown by replaceMessages when the session changed after `expected` was read.
+export class SessionConflictError extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
+    super(`Session ${sessionId} was changed by another turn; reload to see the latest messages`);
+    this.name = "SessionConflictError";
+    this.sessionId = sessionId;
+  }
+}
+
+export function sessionVersion(session: SessionWithMessages): SessionVersion {
+  return { updatedAt: session.updated_at, messageCount: session.messages.length };
+}
+
 // Replace the session's messages with the given array atomically.
 // The agent treats the message array as a value: it appends new entries
 // AND rewrites the tail during swapOut. So overwriting the entire row set
 // is the correct model for persistence.
-export async function replaceMessages(sessionId: string, messages: ModelMessage[]): Promise<void> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session ${sessionId} not found`);
-
-  const newTitle = computeTitle(session.title, messages);
+//
+// The sessions row is locked (SELECT ... FOR NO KEY UPDATE) for the whole
+// write, so concurrent writers are serialized. NO KEY UPDATE rather than
+// UPDATE so it does not wait on the KEY SHARE lock a page insert in a still
+// running turn holds on the same row. When `expected` is given, the write is
+// refused with SessionConflictError if the session's updated_at or message
+// count no longer match what the caller read at the start of its turn.
+//
+// With `client`, the write joins the caller's open transaction (see
+// withSessionTransaction) and the caller commits or rolls back; without it,
+// the write runs in its own transaction.
+export async function replaceMessages(
+  sessionId: string,
+  messages: ModelMessage[],
+  opts: { expected?: SessionVersion; client?: pg.PoolClient } = {}
+): Promise<void> {
+  if (opts.client) return writeMessages(opts.client, sessionId, messages, opts.expected);
 
   const client = await (await import("./db.js")).getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query("DELETE FROM messages WHERE session_id = $1", [sessionId]);
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-      await client.query(
-        `INSERT INTO messages (session_id, ordinal, role, content)
-         VALUES ($1, $2, $3, $4)`,
-        [sessionId, i, msg.role, JSON.stringify(msg.content)]
-      );
-    }
-    await client.query(
-      "UPDATE sessions SET updated_at = NOW(), title = $1 WHERE id = $2",
-      [newTitle, sessionId]
-    );
+    await writeMessages(client, sessionId, messages, opts.expected);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -118,6 +140,55 @@ export async function replaceMessages(sessionId: string, messages: ModelMessage[
   } finally {
     client.release();
   }
+}
+
+async function writeMessages(
+  client: pg.PoolClient,
+  sessionId: string,
+  messages: ModelMessage[],
+  expected: SessionVersion | undefined
+): Promise<void> {
+  const locked = await client.query<{ title: string; updated_at_ms: string; message_count: string }>(
+    `SELECT s.title,
+            FLOOR(EXTRACT(EPOCH FROM s.updated_at) * 1000)::bigint AS updated_at_ms,
+            (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
+     FROM sessions s
+     WHERE s.id = $1
+     FOR NO KEY UPDATE`,
+    [sessionId]
+  );
+  const session = locked.rows[0];
+  if (!session) throw new Error(`Session ${sessionId} not found`);
+
+  if (expected) {
+    // Postgres keeps microseconds, a JS Date only milliseconds (and node-pg's
+    // parse can round the last digit), so allow 1 ms of slack.
+    const sameTime = Math.abs(Number(session.updated_at_ms) - expected.updatedAt.getTime()) <= 1;
+    const sameCount = Number(session.message_count) === expected.messageCount;
+    if (!sameTime || !sameCount) throw new SessionConflictError(sessionId);
+  }
+
+  const newTitle = computeTitle(session.title, messages);
+
+  await client.query("DELETE FROM messages WHERE session_id = $1", [sessionId]);
+  if (messages.length > 0) {
+    // One statement for the whole history instead of one INSERT per message.
+    await client.query(
+      `INSERT INTO messages (session_id, ordinal, role, content)
+       SELECT $1, t.ordinal, t.role, t.content
+       FROM unnest($2::int[], $3::text[], $4::jsonb[]) AS t(ordinal, role, content)`,
+      [
+        sessionId,
+        messages.map((_, i) => i),
+        messages.map((m) => m.role),
+        messages.map((m) => JSON.stringify(m.content)),
+      ]
+    );
+  }
+  await client.query(
+    "UPDATE sessions SET updated_at = NOW(), title = $1 WHERE id = $2",
+    [newTitle, sessionId]
+  );
 }
 
 function computeTitle(currentTitle: string, messages: ModelMessage[]): string {
