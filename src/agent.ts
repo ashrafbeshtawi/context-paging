@@ -1,4 +1,4 @@
-import { streamText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
+import { APICallError, RetryError, streamText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
 import { z } from "zod";
 import {
   handlePageOut,
@@ -168,7 +168,13 @@ export async function runAgent(
 ## Current Page Table
 ${pageTable}`;
 
+  // streamText swallows the provider's error and later only reports "No output
+  // generated"; keep the first one so the caller learns what actually failed.
+  let providerError: unknown;
   const result = streamText({
+    onError({ error }) {
+      providerError ??= error;
+    },
     model: options.model,
     system: systemWithPageTable,
     messages,
@@ -182,16 +188,22 @@ ${pageTable}`;
     },
   });
 
-  // Stream text chunks to the callback
-  for await (const chunk of result.textStream) {
-    options.onText?.(chunk);
+  let finalResult: typeof result;
+  let responseText: string;
+  let response: Awaited<typeof result.response>;
+  try {
+    // Stream text chunks to the callback
+    for await (const chunk of result.textStream) {
+      options.onText?.(chunk);
+    }
+
+    // Wait for the full result
+    finalResult = await result;
+    responseText = await finalResult.text;
+    response = await finalResult.response;
+  } catch (err) {
+    throw describeProviderError(providerError ?? err);
   }
-
-  // Wait for the full result
-  const finalResult = await result;
-  const responseText = await finalResult.text;
-
-  const response = await finalResult.response;
   let updatedMessages: ModelMessage[] = [...messages, ...response.messages];
 
   for (const step of (await finalResult.steps)) {
@@ -226,4 +238,21 @@ ${pageTable}`;
     messages: updatedMessages,
     response: responseText,
   };
+}
+
+// A readable error for the chat: the provider's own message and HTTP status, plus a
+// hint when the key is missing or wrong. Retryable errors (429/529/5xx) arrive wrapped
+// in a RetryError once streamText gives up, so look at the last attempt's error.
+export function describeProviderError(error: unknown): Error {
+  if (RetryError.isInstance(error)) {
+    error = error.lastError;
+  }
+  if (!APICallError.isInstance(error)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  const status = error.statusCode ? ` (HTTP ${error.statusCode})` : "";
+  const keyHint = error.statusCode === 401 || error.statusCode === 403
+    ? " Check the API key in LLM settings or the server's .env."
+    : "";
+  return new Error(`The model provider rejected the request${status}: ${error.message.replace(/\.$/, "")}.${keyHint}`);
 }
