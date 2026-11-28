@@ -3,6 +3,7 @@ import { deleteSession, getSessionWithMessages } from "@/lib/sessions";
 import { withSession } from "@agent/storage";
 import { getPageTable } from "@/lib/page-table";
 import { buildContextView } from "@/lib/context-view";
+import { buildChatTurns } from "@/lib/chat-history";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       model: session.model,
     },
     context: buildContextView(session.messages),
+    turns: buildChatTurns(session.messages),
     pageTable,
   });
 }

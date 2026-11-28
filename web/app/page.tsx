@@ -42,7 +42,12 @@ export default function Home() {
     setPageTable([]);
     const r = await fetch(`/api/sessions/${id}`);
     if (!r.ok) return;
-    const data = (await r.json()) as { context: ContextView; pageTable: PageTableEntry[] };
+    const data = (await r.json()) as {
+      context: ContextView;
+      turns: ChatTurn[];
+      pageTable: PageTableEntry[];
+    };
+    setTurns(data.turns);
     setContext(data.context);
     setPageTable(data.pageTable);
   }, []);

@@ -60,10 +60,12 @@ export default function ChatPanel({ turns, onSend, disabled }: Props) {
         )}
         {turns.map((t) => (
           <div key={t.id}>
-            <div className="msg user">
-              <div className="role">You</div>
-              <div>{t.user}</div>
-            </div>
+            {t.user && (
+              <div className="msg user">
+                <div className="role">You</div>
+                <div>{t.user}</div>
+              </div>
+            )}
             {t.events.map((ev, i) => (
               <div key={i} className={`tool-event ${ev.kind === "result" ? "result" : ""}`}>
                 <span className="name">
