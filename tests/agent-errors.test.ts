@@ -17,7 +17,8 @@ afterAll(async () => {
   await closePool();
 });
 
-function createRejectingModel(statusCode: number, message: string): MockLanguageModelV3 {
+// Retryable errors carry retry-after-ms: 0 so streamText's retries don't wait out its backoff.
+function createRejectingModel(statusCode: number, message: string, isRetryable = false): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doStream: async () => {
       throw new APICallError({
@@ -25,7 +26,8 @@ function createRejectingModel(statusCode: number, message: string): MockLanguage
         url: "https://api.example.com/v1/messages",
         requestBodyValues: {},
         statusCode,
-        isRetryable: false,
+        isRetryable,
+        responseHeaders: isRetryable ? { "retry-after-ms": "0" } : undefined,
       });
     },
   });
@@ -44,10 +46,19 @@ describe("runAgent provider errors", () => {
   });
 
   it("gives no key hint for other provider errors", async () => {
-    const model = createRejectingModel(529, "Overloaded.");
+    const model = createRejectingModel(400, "Bad request.");
+
+    const run = withSession(sid, () => runAgent([{ role: "user", content: "hi" }], { model }));
+
+    await expect(run).rejects.toThrow("The model provider rejected the request (HTTP 400): Bad request.");
+  });
+
+  it("names the status of a retryable error after streamText gives up retrying", async () => {
+    const model = createRejectingModel(529, "Overloaded.", true);
 
     const run = withSession(sid, () => runAgent([{ role: "user", content: "hi" }], { model }));
 
     await expect(run).rejects.toThrow("The model provider rejected the request (HTTP 529): Overloaded.");
+    expect(model.doStreamCalls).toHaveLength(3);
   });
 });

@@ -1,4 +1,4 @@
-import { APICallError, streamText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
+import { APICallError, RetryError, streamText, tool, stepCountIs, type ModelMessage, type LanguageModel } from "ai";
 import { z } from "zod";
 import {
   handlePageOut,
@@ -241,8 +241,12 @@ ${pageTable}`;
 }
 
 // A readable error for the chat: the provider's own message and HTTP status, plus a
-// hint when the key is missing or wrong.
+// hint when the key is missing or wrong. Retryable errors (429/529/5xx) arrive wrapped
+// in a RetryError once streamText gives up, so look at the last attempt's error.
 export function describeProviderError(error: unknown): Error {
+  if (RetryError.isInstance(error)) {
+    error = error.lastError;
+  }
   if (!APICallError.isInstance(error)) {
     return error instanceof Error ? error : new Error(String(error));
   }
